@@ -1,0 +1,7 @@
+{
+  "name": "bluetti-dashboard",
+  "scripts": {
+    "dev": "bun run --hot server.ts",
+    "start": "bun run server.ts"
+  }
+}

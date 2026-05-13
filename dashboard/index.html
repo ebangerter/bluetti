@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bluetti AC200MAX Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, system-ui, sans-serif; background: #0f1117; color: #e0e0e0; min-height: 100vh; }
+  header { background: #1a1d28; padding: 16px 24px; border-bottom: 1px solid #2a2d3a; display: flex; align-items: center; justify-content: space-between; }
+  header h1 { font-size: 20px; color: #4fc3f7; }
+  .status { font-size: 13px; color: #888; }
+  .status .live { color: #66bb6a; }
+  .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+
+  .prediction-bar {
+    background: linear-gradient(135deg, #1b5e20, #2e7d32);
+    border-radius: 12px; padding: 20px 28px; margin-bottom: 24px;
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; align-items: center;
+  }
+  .prediction-bar.discharging { background: linear-gradient(135deg, #b71c1c, #c62828); }
+  .prediction-bar h2 { font-size: 16px; color: #a5d6a7; margin-bottom: 4px; }
+  .prediction-bar.discharging h2 { color: #ef9a9a; }
+  .pred-value { font-size: 28px; font-weight: 700; color: #fff; }
+  .pred-label { font-size: 12px; color: #c8e6c9; margin-top: 2px; }
+  .prediction-bar.discharging .pred-label { color: #ffcdd2; }
+
+  .kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .kpi { background: #1a1d28; border-radius: 10px; padding: 16px; border: 1px solid #2a2d3a; text-align: center; }
+  .kpi .val { font-size: 28px; font-weight: 700; }
+  .kpi .label { font-size: 12px; color: #888; margin-top: 4px; }
+  .kpi .unit { font-size: 14px; font-weight: 400; color: #aaa; }
+  .green { color: #66bb6a; } .red { color: #ef5350; } .blue { color: #42a5f5; } .yellow { color: #fdd835; } .cyan { color: #4fc3f7; }
+
+  .charts { display: grid; gap: 20px; }
+  .chart-card { background: #1a1d28; border-radius: 12px; padding: 20px; border: 1px solid #2a2d3a; }
+  .chart-card h3 { font-size: 14px; color: #888; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .chart-card canvas { width: 100% !important; height: 260px !important; }
+
+  .refresh-row { text-align: center; margin-top: 16px; }
+  button { background: #42a5f5; color: #fff; border: none; padding: 10px 24px; border-radius: 8px; cursor: pointer; font-size: 14px; }
+  button:hover { background: #1e88e5; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Bluetti AC200MAX</h1>
+  <div class="status">Last update: <span id="lastUpdate">--</span> &middot; <span class="live" id="count">0</span> readings</div>
+</header>
+
+<div class="container">
+  <div id="predictionBar" class="prediction-bar" style="display:none"></div>
+  <div class="kpi-row" id="kpiRow"></div>
+  <div class="charts">
+    <div class="chart-card"><h3>Battery</h3><canvas id="batteryChart"></canvas></div>
+    <div class="chart-card"><h3>Power Flow</h3><canvas id="powerChart"></canvas></div>
+    <div class="chart-card"><h3>DC Input (Solar)</h3><canvas id="dcChart"></canvas></div>
+    <div class="chart-card"><h3>AC Output</h3><canvas id="acChart"></canvas></div>
+  </div>
+  <div class="refresh-row">
+    <button onclick="loadData()">Refresh</button>
+    <label style="margin-left:12px;font-size:13px;color:#888"><input type="checkbox" id="autoRefresh" checked> Auto-refresh (10s)</label>
+  </div>
+</div>
+
+<script>
+const COLORS = {
+  green: "#66bb6a", red: "#ef5350", blue: "#42a5f5", orange: "#ffa726",
+  purple: "#ab47bc", cyan: "#4fc3f7", yellow: "#fdd835",
+  greenBg: "rgba(102,187,106,0.15)", blueBg: "rgba(66,165,245,0.15)",
+};
+
+const commonOpts = {
+  responsive: true,
+  maintainAspectRatio: false,
+  interaction: { mode: "index", intersect: false },
+  plugins: { legend: { labels: { color: "#aaa", boxWidth: 12, padding: 16 } } },
+  scales: {
+    x: { type: "time", time: { tooltipFormat: "HH:mm:ss", displayFormats: { minute: "HH:mm" } },
+         ticks: { color: "#555" }, grid: { color: "#222" } },
+    y: { ticks: { color: "#555" }, grid: { color: "#222" } },
+  },
+};
+
+let charts = {};
+let refreshTimer;
+
+function makeChart(id, datasets, yAxes) {
+  if (charts[id]) charts[id].destroy();
+  const opts = JSON.parse(JSON.stringify(commonOpts));
+  if (yAxes) {
+    opts.scales = { ...opts.scales, ...yAxes };
+  }
+  charts[id] = new Chart(document.getElementById(id), {
+    type: "line", data: { datasets },
+    options: { ...opts, animation: { duration: 400 } },
+  });
+}
+
+function ts(rows) { return rows.map(r => ({ x: r.timestamp, y: undefined })); }
+
+function fmtTime(iso) {
+  if (!iso || iso === "Already full" || iso === "Not charging (discharging or flat)") return iso;
+  const d = new Date(iso);
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function renderKPIs(rows) {
+  const last = rows[rows.length - 1];
+  if (!last) return;
+  const kpis = [
+    { val: last.total_battery_percent, unit: "%", label: "Battery", cls: "green" },
+    { val: last.total_battery_voltage?.toFixed(2), unit: "V", label: "Battery Voltage", cls: "cyan" },
+    { val: last.dc_input_power, unit: "W", label: "DC Input (Solar)", cls: "green" },
+    { val: last.ac_output_power, unit: "W", label: "AC Output (Load)", cls: "red" },
+    { val: last.internal_dc_input_voltage, unit: "V", label: "DC Voltage", cls: "yellow" },
+    { val: last.internal_current_one, unit: "A", label: "AC Current", cls: "orange" },
+    { val: last.internal_ac_frequency, unit: "Hz", label: "AC Freq", cls: "purple" },
+    { val: last.ac_output_on ? "ON" : "OFF", unit: "", label: "AC Output", cls: last.ac_output_on ? "green" : "red" },
+  ];
+  document.getElementById("kpiRow").innerHTML = kpis.map(k =>
+    `<div class="kpi"><div class="val ${k.cls}">${k.val}<span class="unit">${k.unit}</span></div><div class="label">${k.label}</div></div>`
+  ).join("");
+}
+
+function renderPrediction(pred) {
+  const bar = document.getElementById("predictionBar");
+  if (!pred) { bar.style.display = "none"; return; }
+  bar.style.display = "grid";
+  const isCharging = pred.pctPerMin > 0;
+  bar.className = "prediction-bar" + (isCharging ? "" : " discharging");
+  bar.innerHTML = `
+    <div><h2>Battery Now</h2><div class="pred-value">${pred.batteryNow}%</div></div>
+    <div><h2>${isCharging ? "Charge Rate" : "Discharge Rate"}</h2><div class="pred-value">${Math.abs(pred.avgChargeRate)}%<span class="pred-label">/hour</span></div></div>
+    <div><h2>${isCharging ? "Full At" : "Status"}</h2><div class="pred-value" style="font-size:22px">${fmtTime(pred.fullAt)}</div><div class="pred-label">${isCharging ? "~" + pred.minsLeft + " min remaining" : ""}</div></div>
+  `;
+}
+
+function renderCharts(rows) {
+  const points = (key) => rows.map(r => ({ x: r.timestamp, y: r[key] }));
+
+  makeChart("batteryChart", [
+    { label: "Battery %", data: points("total_battery_percent"), borderColor: COLORS.green, backgroundColor: COLORS.greenBg, fill: true, yAxisID: "y", tension: 0.3 },
+    { label: "Battery Voltage", data: points("total_battery_voltage"), borderColor: COLORS.cyan, yAxisID: "y1", tension: 0.3 },
+  ], {
+    y: { position: "left", min: 0, max: 100, ticks: { color: COLORS.green, callback: v => v + "%" }, grid: { color: "#222" } },
+    y1: { position: "right", ticks: { color: COLORS.cyan, callback: v => v + "V" }, grid: { drawOnChartArea: false } },
+    x: commonOpts.scales.x,
+  });
+
+  makeChart("powerChart", [
+    { label: "DC Input", data: points("dc_input_power"), borderColor: COLORS.green, tension: 0.3 },
+    { label: "AC Output", data: points("ac_output_power"), borderColor: COLORS.red, tension: 0.3 },
+    { label: "AC Input", data: points("ac_input_power"), borderColor: COLORS.blue, tension: 0.3 },
+    { label: "DC Output", data: points("dc_output_power"), borderColor: COLORS.orange, tension: 0.3 },
+  ]);
+
+  makeChart("dcChart", [
+    { label: "DC Power (W)", data: points("internal_dc_input_power"), borderColor: COLORS.green, tension: 0.3, yAxisID: "y" },
+    { label: "DC Voltage (V)", data: points("internal_dc_input_voltage"), borderColor: COLORS.yellow, yAxisID: "y1", tension: 0.3 },
+    { label: "DC Current (A)", data: points("internal_dc_input_current"), borderColor: COLORS.purple, yAxisID: "y2", tension: 0.3 },
+  ], {
+    y:  { position: "left",  ticks: { color: COLORS.green }, grid: { color: "#222" } },
+    y1: { position: "right", ticks: { color: COLORS.yellow }, grid: { drawOnChartArea: false } },
+    y2: { display: false },
+    x: commonOpts.scales.x,
+  });
+
+  makeChart("acChart", [
+    { label: "AC Power (W)", data: points("internal_power_one"), borderColor: COLORS.red, tension: 0.3, yAxisID: "y" },
+    { label: "AC Voltage (V)", data: points("internal_ac_voltage"), borderColor: COLORS.blue, yAxisID: "y1", tension: 0.3 },
+    { label: "AC Current (A)", data: points("internal_current_one"), borderColor: COLORS.orange, yAxisID: "y2", tension: 0.3 },
+    { label: "AC Freq (Hz)", data: points("internal_ac_frequency"), borderColor: COLORS.purple, borderDash: [4,4], yAxisID: "y3", tension: 0.3 },
+  ], {
+    y:  { position: "left",  ticks: { color: COLORS.red }, grid: { color: "#222" } },
+    y1: { position: "right", ticks: { color: COLORS.blue }, grid: { drawOnChartArea: false } },
+    y2: { display: false },
+    y3: { display: false },
+    x: commonOpts.scales.x,
+  });
+}
+
+async function loadData() {
+  try {
+    const res = await fetch("/api/data");
+    const { rows, prediction } = await res.json();
+    if (!rows.length) return;
+    document.getElementById("count").textContent = rows.length;
+    document.getElementById("lastUpdate").textContent = new Date().toLocaleTimeString();
+    renderKPIs(rows);
+    renderPrediction(prediction);
+    renderCharts(rows);
+  } catch (e) {
+    console.error("Failed to load data:", e);
+  }
+}
+
+function startAutoRefresh() {
+  clearInterval(refreshTimer);
+  if (document.getElementById("autoRefresh").checked) {
+    refreshTimer = setInterval(loadData, 10000);
+  }
+}
+
+document.getElementById("autoRefresh").addEventListener("change", startAutoRefresh);
+loadData();
+startAutoRefresh();
+</script>
+</body>
+</html>
