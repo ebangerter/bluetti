@@ -349,13 +349,17 @@ def main():
     csv_file = None
 
     if args.csv:
+        import os
+
         if args.loop == 1 and interval == 5:
             loop_count = 180
             interval = 60
-        csv_file = open(args.csv, "w", newline="")
+        file_exists = os.path.isfile(args.csv) and os.path.getsize(args.csv) > 0
+        csv_file = open(args.csv, "a", newline="")
         csv_writer = csv.DictWriter(csv_file, fieldnames=CSV_COLUMNS)
-        csv_writer.writeheader()
-        csv_file.flush()
+        if not file_exists:
+            csv_writer.writeheader()
+            csv_file.flush()
         print(f"Logging to {args.csv} ({loop_count} readings, every {interval}s)")
 
     try:
