@@ -352,7 +352,7 @@ def main():
         import os
 
         if args.loop == 1 and interval == 5:
-            loop_count = 180
+            loop_count = 1440
             interval = 60
         file_exists = os.path.isfile(args.csv) and os.path.getsize(args.csv) > 0
         csv_file = open(args.csv, "a", newline="")

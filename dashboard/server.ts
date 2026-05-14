@@ -48,7 +48,7 @@ function computePrediction(rows: any[]) {
   if (elapsedMin < 1) return null;
 
   const pctPerMin = (batteryNow - batteryStart) / elapsedMin;
-  if (pctPerMin <= 0) return { fullAt: "Not charging (discharging or flat)", pctPerMin, minsLeft: Infinity };
+  if (pctPerMin <= 0) return { fullAt: "Not charging (discharging or flat)", pctPerMin, minsLeft: Infinity, batteryNow, avgChargeRate: Math.round(pctPerMin * 60 * 10) / 10 };
 
   const minsLeft = (100 - batteryNow) / pctPerMin;
   const fullAt = new Date(t1 + minsLeft * 60000);
@@ -64,6 +64,25 @@ function computePrediction(rows: any[]) {
   };
 }
 
+function computeDailyTotal(rows: any[]) {
+  const today = new Date().toISOString().slice(0, 10);
+  let producedW = 0;
+  let usedW = 0;
+
+  for (let i = 0; i < rows.length; i++) {
+    const ts = rows[i].timestamp?.toString().slice(0, 10);
+    if (ts !== today) continue;
+
+    producedW += (rows[i].dc_input_power || 0);
+    usedW += (rows[i].ac_output_power || 0) + (rows[i].dc_output_power || 0);
+  }
+
+  return {
+    producedW: Math.round(producedW),
+    usedW: Math.round(usedW),
+  };
+}
+
 const server = Bun.serve({
   port: 5000,
   async fetch(req) {
@@ -71,7 +90,7 @@ const server = Bun.serve({
 
     if (url.pathname === "/api/data") {
       const rows = readData();
-      return Response.json({ rows, prediction: computePrediction(rows) });
+      return Response.json({ rows, prediction: computePrediction(rows), dailyTotal: computeDailyTotal(rows) });
     }
 
     const html = readFileSync(resolve(import.meta.dir, "index.html"), "utf-8");

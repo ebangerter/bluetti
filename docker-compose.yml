@@ -1,0 +1,8 @@
+services:
+  bluetti:
+    image: mariadb:latest
+    ports:
+      - "3390:3306"
+    environment:
+      MARIADB_ROOT_PASSWORD: kilroy
+    restart: always

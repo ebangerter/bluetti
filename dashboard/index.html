@@ -32,7 +32,7 @@
   .kpi .val { font-size: 28px; font-weight: 700; }
   .kpi .label { font-size: 12px; color: #888; margin-top: 4px; }
   .kpi .unit { font-size: 14px; font-weight: 400; color: #aaa; }
-  .green { color: #66bb6a; } .red { color: #ef5350; } .blue { color: #42a5f5; } .yellow { color: #fdd835; } .cyan { color: #4fc3f7; }
+  .green { color: #66bb6a; } .red { color: #ef5350; } .blue { color: #42a5f5; } .yellow { color: #fdd835; } .cyan { color: #4fc3f7; } .orange { color: #ffa726; } .purple { color: #ab47bc; }
 
   .charts { display: grid; gap: 20px; }
   .chart-card { background: #1a1d28; border-radius: 12px; padding: 20px; border: 1px solid #2a2d3a; }
@@ -120,6 +120,16 @@ function renderKPIs(rows) {
     { val: last.internal_ac_frequency, unit: "Hz", label: "AC Freq", cls: "purple" },
     { val: last.ac_output_on ? "ON" : "OFF", unit: "", label: "AC Output", cls: last.ac_output_on ? "green" : "red" },
   ];
+
+  if (window._dailyTotal) {
+    const dt = window._dailyTotal;
+    const fmt = (w) => w >= 1000 ? (w / 1000).toFixed(1) : w;
+    const u = (w) => w >= 1000 ? "kW" : "W";
+    kpis.push(
+      { val: fmt(dt.producedW), unit: u(dt.producedW), label: "Produced Today", cls: "green" },
+      { val: fmt(dt.usedW), unit: u(dt.usedW), label: "Used Today", cls: "red" },
+    );
+  }
   document.getElementById("kpiRow").innerHTML = kpis.map(k =>
     `<div class="kpi"><div class="val ${k.cls}">${k.val}<span class="unit">${k.unit}</span></div><div class="label">${k.label}</div></div>`
   ).join("");
@@ -185,8 +195,9 @@ function renderCharts(rows) {
 async function loadData() {
   try {
     const res = await fetch("/api/data");
-    const { rows, prediction } = await res.json();
+    const { rows, prediction, dailyTotal } = await res.json();
     if (!rows.length) return;
+    window._dailyTotal = dailyTotal;
     document.getElementById("count").textContent = rows.length;
     document.getElementById("lastUpdate").textContent = new Date().toLocaleTimeString();
     renderKPIs(rows);
