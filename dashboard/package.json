@@ -3,5 +3,8 @@
   "scripts": {
     "dev": "bun run --hot server.ts",
     "start": "bun run server.ts"
+  },
+  "dependencies": {
+    "mysql2": "^3.22.3"
   }
 }

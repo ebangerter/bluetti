@@ -3,3 +3,6 @@ data.csv
 node_modules/
 __pycache__/
 nohup.out
+build/
+dist/
+*.spec

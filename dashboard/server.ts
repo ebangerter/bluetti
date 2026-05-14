@@ -1,36 +1,35 @@
-import { readFileSync, watchFile } from "fs";
+import { readFileSync } from "fs";
 import { resolve } from "path";
+import mysql from "mysql2/promise";
 
-const CSV_PATH = resolve(import.meta.dir, "..", "data.csv");
+const DB_HOST = "127.0.0.1";
+const DB_PORT = 3390;
+const DB_USER = "root";
+const DB_PASSWORD = "kilroy";
+const DB_NAME = "Bluetti_AC200MAX";
 
-function parseCSV(content: string) {
-  const lines = content.trim().split("\n");
-  if (lines.length < 2) return [];
+const pool = mysql.createPool({
+  host: DB_HOST,
+  port: DB_PORT,
+  user: DB_USER,
+  password: DB_PASSWORD,
+  database: DB_NAME,
+  charset: "utf8mb4",
+  waitForConnections: true,
+  connectionLimit: 5,
+  dateStrings: true,
+  decimalNumbers: true,
+});
 
-  const headers = lines[0].split(",");
-  const rows = [];
+const SELECT_COLS = `timestamp, total_battery_percent, total_battery_voltage, ac_input_power, dc_input_power, ac_output_power, dc_output_power, internal_ac_voltage, internal_current_one, internal_power_one, internal_ac_frequency, internal_dc_input_voltage, internal_dc_input_power, internal_dc_input_current, power_generation, ac_output_on, dc_output_on, pack_battery_percent, pack_voltage`;
 
-  for (let i = 1; i < lines.length; i++) {
-    const values = lines[i].split(",");
-    const row: Record<string, string | number | boolean> = {};
-    for (let j = 0; j < headers.length; j++) {
-      const v = values[j]?.trim();
-      if (v === "True") row[headers[j]] = true;
-      else if (v === "False") row[headers[j]] = false;
-      else if (v !== "" && !isNaN(Number(v))) row[headers[j]] = Number(v);
-      else row[headers[j]] = v;
-    }
-    rows.push(row);
-  }
-  return rows;
-}
-
-function readData() {
-  try {
-    return parseCSV(readFileSync(CSV_PATH, "utf-8"));
-  } catch {
-    return [];
-  }
+async function readData() {
+  const [rows] = await pool.query(`SELECT ${SELECT_COLS} FROM readings ORDER BY timestamp ASC`);
+  return (rows as any[]).map((r) => ({
+    ...r,
+    ac_output_on: !!r.ac_output_on,
+    dc_output_on: !!r.dc_output_on,
+  }));
 }
 
 function computePrediction(rows: any[]) {
@@ -89,7 +88,7 @@ const server = Bun.serve({
     const url = new URL(req.url);
 
     if (url.pathname === "/api/data") {
-      const rows = readData();
+      const rows = await readData();
       return Response.json({ rows, prediction: computePrediction(rows), dailyTotal: computeDailyTotal(rows) });
     }
 
@@ -98,4 +97,4 @@ const server = Bun.serve({
   },
 });
 
-console.log(`Dashboard running at http://localhost:${server.port}`);
+console.log(`Dashboard running at http://localhost:${server.port} (data from MariaDB ${DB_HOST}:${DB_PORT}/${DB_NAME})`);
