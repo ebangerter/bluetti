@@ -4,6 +4,7 @@
 import argparse
 import asyncio
 import csv
+import os
 import struct
 import sys
 import time
@@ -27,11 +28,11 @@ try:
 except ImportError:
     pymysql = None
 
-DB_HOST = "127.0.0.1"
-DB_PORT = 3390
-DB_USER = "root"
-DB_PASSWORD = "kilroy"
-DB_NAME = "Bluetti_AC200MAX"
+DB_HOST = os.environ.get("BLUETTI_DB_HOST", "127.0.0.1")
+DB_PORT = int(os.environ.get("BLUETTI_DB_PORT", "3390"))
+DB_USER = os.environ.get("BLUETTI_DB_USER", "root")
+DB_PASSWORD = os.environ.get("BLUETTI_DB_PASSWORD", "kilroy")
+DB_NAME = os.environ.get("BLUETTI_DB_NAME", "Bluetti_AC200MAX")
 
 
 WRITE_UUID = "0000ff02-0000-1000-8000-00805f9b34fb"
@@ -182,6 +183,42 @@ def db_connect():
         return None
 
 
+def db_init(conn):
+    if conn is None:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS readings (
+                    id                      INT AUTO_INCREMENT PRIMARY KEY,
+                    timestamp               DATETIME NOT NULL UNIQUE,
+                    total_battery_percent   INT,
+                    total_battery_voltage   DECIMAL(10,4),
+                    ac_input_power          INT,
+                    dc_input_power          INT,
+                    ac_output_power         INT,
+                    dc_output_power         INT,
+                    internal_ac_voltage     DECIMAL(10,4),
+                    internal_current_one    DECIMAL(10,4),
+                    internal_power_one      INT,
+                    internal_ac_frequency   INT,
+                    internal_dc_input_voltage   DECIMAL(10,4),
+                    internal_dc_input_power     DECIMAL(10,4),
+                    internal_dc_input_current   DECIMAL(10,4),
+                    power_generation        INT,
+                    ac_output_on            TINYINT(1) NOT NULL DEFAULT 0,
+                    dc_output_on            TINYINT(1) NOT NULL DEFAULT 0,
+                    pack_battery_percent    INT,
+                    pack_voltage            DECIMAL(10,4)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_readings_timestamp ON readings(timestamp)")
+        conn.commit()
+        print("  Database schema ready")
+    except Exception as e:
+        print(f"  WARNING: DB init failed: {e}", file=sys.stderr)
+
+
 def db_insert_row(conn, row):
     if conn is None:
         return
@@ -256,9 +293,13 @@ async def scan():
 
 
 async def read_device(address, loop_count=1, interval=5, csv_writer=None, csv_file=None, db_conn=None):
+    print(f"Scanning for {address}...")
+    device = await BleakScanner.find_device_by_address(address, timeout=15)
+    if device is None:
+        raise RuntimeError(f"Device {address} not found during scan")
     print(f"Connecting to {address}...")
 
-    async with BleakClient(address) as client:
+    async with BleakClient(device) as client:
         name = await client.read_gatt_char(DEVICE_NAME_UUID)
         print(f"Connected to: {name.decode('ascii', errors='replace')}")
 
@@ -269,7 +310,8 @@ async def read_device(address, loop_count=1, interval=5, csv_writer=None, csv_fi
 
         await client.start_notify(NOTIFY_UUID, notification_handler)
 
-        for loop in range(loop_count):
+        loop = 0
+        while loop < loop_count:
             all_results = {}
             reading_time = time.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -358,9 +400,16 @@ async def read_device(address, loop_count=1, interval=5, csv_writer=None, csv_fi
                 csv_writer.writerow(row)
                 csv_file.flush()
                 db_insert_row(db_conn, row)
+            elif db_conn and all_results:
+                row = {"timestamp": reading_time}
+                for col in CSV_COLUMNS[1:]:
+                    if col in all_results:
+                        row[col] = all_results[col][0]
+                db_insert_row(db_conn, row)
 
             if loop < loop_count - 1:
                 await asyncio.sleep(interval)
+            loop += 1
 
         await client.stop_notify(NOTIFY_UUID)
 
@@ -383,6 +432,7 @@ def main():
     parser.add_argument("--loop", "-l", type=int, default=1, help="Number of readings (default: 1, use 0 for infinite)")
     parser.add_argument("--interval", "-i", type=int, default=5, help="Seconds between readings (default: 5)")
     parser.add_argument("--csv", metavar="FILE", help="Log readings to CSV (defaults: --loop 180 --interval 60)")
+    parser.add_argument("--mysql", action="store_true", help="Store readings in MariaDB (auto-enabled when --csv is used)")
     args = parser.parse_args()
 
     if args.scan or not args.address:
@@ -401,6 +451,13 @@ def main():
     csv_file = None
     db_conn = None
 
+    use_mysql = args.mysql or bool(args.csv)
+
+    if use_mysql:
+        db_conn = db_connect()
+        if db_conn:
+            db_init(db_conn)
+
     if args.csv:
         import os
 
@@ -413,11 +470,14 @@ def main():
         if not file_exists:
             csv_writer.writeheader()
             csv_file.flush()
-        db_conn = db_connect()
-        if db_conn:
-            print(f"Logging to {args.csv} + MariaDB ({loop_count} readings, every {interval}s)")
-        else:
-            print(f"Logging to {args.csv} ({loop_count} readings, every {interval}s)")
+
+    targets = []
+    if args.csv:
+        targets.append(args.csv)
+    if db_conn:
+        targets.append("MariaDB")
+    if targets:
+        print(f"Logging to {' + '.join(targets)} ({loop_count} readings, every {interval}s)")
 
     try:
         asyncio.run(read_device(args.address, loop_count, interval, csv_writer, csv_file, db_conn))

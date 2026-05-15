@@ -2,11 +2,11 @@ import { readFileSync } from "fs";
 import { resolve } from "path";
 import mysql from "mysql2/promise";
 
-const DB_HOST = "127.0.0.1";
-const DB_PORT = 3390;
-const DB_USER = "root";
-const DB_PASSWORD = "kilroy";
-const DB_NAME = "Bluetti_AC200MAX";
+const DB_HOST = process.env.BLUETTI_DB_HOST || "127.0.0.1";
+const DB_PORT = parseInt(process.env.BLUETTI_DB_PORT || "3390", 10);
+const DB_USER = process.env.BLUETTI_DB_USER || "root";
+const DB_PASSWORD = process.env.BLUETTI_DB_PASSWORD || "kilroy";
+const DB_NAME = process.env.BLUETTI_DB_NAME || "Bluetti_AC200MAX";
 
 const pool = mysql.createPool({
   host: DB_HOST,
@@ -23,13 +23,31 @@ const pool = mysql.createPool({
 
 const SELECT_COLS = `timestamp, total_battery_percent, total_battery_voltage, ac_input_power, dc_input_power, ac_output_power, dc_output_power, internal_ac_voltage, internal_current_one, internal_power_one, internal_ac_frequency, internal_dc_input_voltage, internal_dc_input_power, internal_dc_input_current, power_generation, ac_output_on, dc_output_on, pack_battery_percent, pack_voltage`;
 
-async function readData() {
-  const [rows] = await pool.query(`SELECT ${SELECT_COLS} FROM readings ORDER BY timestamp ASC`);
+async function readData(date?: string) {
+  let sql: string;
+  let params: any[] = [];
+  if (date) {
+    sql = `SELECT ${SELECT_COLS} FROM readings WHERE timestamp >= ? AND timestamp < ? + INTERVAL 1 DAY ORDER BY timestamp ASC`;
+    params = [date, date];
+  } else {
+    sql = `SELECT ${SELECT_COLS} FROM readings ORDER BY timestamp ASC`;
+  }
+  const [rows] = await pool.query(sql, params);
   return (rows as any[]).map((r) => ({
     ...r,
     ac_output_on: !!r.ac_output_on,
     dc_output_on: !!r.dc_output_on,
   }));
+}
+
+async function readAvailableDates() {
+  const [rows] = await pool.query(
+    `SELECT DISTINCT DATE(timestamp) AS date FROM readings ORDER BY date ASC`
+  );
+  return (rows as any[]).map((r) => {
+    const d = r.date;
+    return typeof d === "string" ? d : (d as Date).toISOString().slice(0, 10);
+  });
 }
 
 function computePrediction(rows: any[]) {
@@ -63,14 +81,13 @@ function computePrediction(rows: any[]) {
   };
 }
 
-function computeDailyTotal(rows: any[]) {
-  const today = new Date().toISOString().slice(0, 10);
+function computeDailyTotal(rows: any[], date: string) {
   let producedW = 0;
   let usedW = 0;
 
   for (let i = 0; i < rows.length; i++) {
     const ts = rows[i].timestamp?.toString().slice(0, 10);
-    if (ts !== today) continue;
+    if (ts !== date) continue;
 
     producedW += (rows[i].dc_input_power || 0);
     usedW += (rows[i].ac_output_power || 0) + (rows[i].dc_output_power || 0);
@@ -87,9 +104,21 @@ const server = Bun.serve({
   async fetch(req) {
     const url = new URL(req.url);
 
+    if (url.pathname === "/api/dates") {
+      const dates = await readAvailableDates();
+      return Response.json({ dates });
+    }
+
     if (url.pathname === "/api/data") {
-      const rows = await readData();
-      return Response.json({ rows, prediction: computePrediction(rows), dailyTotal: computeDailyTotal(rows) });
+      const date = url.searchParams.get("date") || undefined;
+      const rows = await readData(date);
+      const targetDate = date || new Date().toISOString().slice(0, 10);
+      return Response.json({
+        rows,
+        prediction: computePrediction(rows),
+        dailyTotal: computeDailyTotal(rows, targetDate),
+        date: targetDate,
+      });
     }
 
     const html = readFileSync(resolve(import.meta.dir, "index.html"), "utf-8");

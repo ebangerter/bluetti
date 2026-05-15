@@ -39,6 +39,39 @@
   .chart-card h3 { font-size: 14px; color: #888; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
   .chart-card canvas { width: 100% !important; height: 260px !important; }
 
+  .calendar-bar {
+    display: flex; align-items: center; gap: 16px; margin-bottom: 24px;
+    background: #1a1d28; border-radius: 12px; padding: 16px 24px; border: 1px solid #2a2d3a;
+    flex-wrap: wrap;
+  }
+  .calendar-bar .nav-btn {
+    background: #2a2d3a; color: #aaa; border: none; width: 36px; height: 36px;
+    border-radius: 8px; cursor: pointer; font-size: 18px; display: flex; align-items: center; justify-content: center;
+  }
+  .calendar-bar .nav-btn:hover { background: #3a3d4a; color: #fff; }
+  .calendar-bar .month-label { font-size: 16px; font-weight: 600; color: #e0e0e0; min-width: 140px; text-align: center; }
+  .calendar-grid {
+    display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px;
+  }
+  .calendar-grid .day-header { font-size: 11px; color: #555; text-align: center; padding: 4px 0; }
+  .calendar-grid .day {
+    width: 36px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center;
+    font-size: 13px; cursor: pointer; color: #666; border: none; background: transparent;
+    transition: all 0.15s;
+  }
+  .calendar-grid .day:hover { background: #2a2d3a; color: #ccc; }
+  .calendar-grid .day.has-data { color: #e0e0e0; background: #2a2d3a; }
+  .calendar-grid .day.has-data:hover { background: #3a3d4a; }
+  .calendar-grid .day.selected { background: #42a5f5 !important; color: #fff !important; font-weight: 600; }
+  .calendar-grid .day.today { border: 1px solid #42a5f5; }
+  .calendar-grid .day.empty { visibility: hidden; }
+  .calendar-grid .day.other-month { color: #333; }
+  .today-btn {
+    background: #42a5f5; color: #fff; border: none; padding: 8px 16px; border-radius: 8px;
+    cursor: pointer; font-size: 13px; margin-left: auto;
+  }
+  .today-btn:hover { background: #1e88e5; }
+
   .refresh-row { text-align: center; margin-top: 16px; }
   button { background: #42a5f5; color: #fff; border: none; padding: 10px 24px; border-radius: 8px; cursor: pointer; font-size: 14px; }
   button:hover { background: #1e88e5; }
@@ -51,6 +84,13 @@
 </header>
 
 <div class="container">
+  <div class="calendar-bar">
+    <button class="nav-btn" onclick="navMonth(-1)">&#9664;</button>
+    <div class="month-label" id="monthLabel"></div>
+    <button class="nav-btn" onclick="navMonth(1)">&#9654;</button>
+    <div class="calendar-grid" id="calendarGrid"></div>
+    <button class="today-btn" onclick="goToday()">Today</button>
+  </div>
   <div id="predictionBar" class="prediction-bar" style="display:none"></div>
   <div class="kpi-row" id="kpiRow"></div>
   <div class="charts">
@@ -78,14 +118,19 @@ const commonOpts = {
   interaction: { mode: "index", intersect: false },
   plugins: { legend: { labels: { color: "#aaa", boxWidth: 12, padding: 16 } } },
   scales: {
-    x: { type: "time", time: { tooltipFormat: "HH:mm:ss", displayFormats: { minute: "HH:mm" } },
-         ticks: { color: "#555" }, grid: { color: "#222" } },
+    x: { type: "time", time: { unit: "minute", stepSize: 1, tooltipFormat: "HH:mm:ss", displayFormats: { minute: "HH:mm" } },
+         ticks: { color: "#555", maxRotation: 45, autoSkip: true, maxTicksLimit: 60 }, grid: { color: "#222" } },
     y: { ticks: { color: "#555" }, grid: { color: "#222" } },
   },
 };
 
 let charts = {};
 let refreshTimer;
+let availableDates = new Set();
+let selectedDate = null;
+let calendarYear, calendarMonth;
+
+function todayStr() { return new Date().toISOString().slice(0, 10); }
 
 function makeChart(id, datasets, yAxes) {
   if (charts[id]) charts[id].destroy();
@@ -93,8 +138,14 @@ function makeChart(id, datasets, yAxes) {
   if (yAxes) {
     opts.scales = { ...opts.scales, ...yAxes };
   }
+  const hasBar = datasets.some(d => d.type === "bar");
+  if (hasBar) {
+    opts.scales.x.stacked = false;
+    opts.scales.y.stacked = false;
+  }
   charts[id] = new Chart(document.getElementById(id), {
-    type: "line", data: { datasets },
+    type: "line",
+    data: { datasets },
     options: { ...opts, animation: { duration: 400 } },
   });
 }
@@ -125,9 +176,11 @@ function renderKPIs(rows) {
     const dt = window._dailyTotal;
     const fmt = (w) => w >= 1000 ? (w / 1000).toFixed(1) : w;
     const u = (w) => w >= 1000 ? "kW" : "W";
+    const label = selectedDate === todayStr() ? "Produced Today" : "Produced";
+    const label2 = selectedDate === todayStr() ? "Used Today" : "Used";
     kpis.push(
-      { val: fmt(dt.producedW), unit: u(dt.producedW), label: "Produced Today", cls: "green" },
-      { val: fmt(dt.usedW), unit: u(dt.usedW), label: "Used Today", cls: "red" },
+      { val: fmt(dt.producedW), unit: u(dt.producedW), label: label, cls: "green" },
+      { val: fmt(dt.usedW), unit: u(dt.usedW), label: label2, cls: "red" },
     );
   }
   document.getElementById("kpiRow").innerHTML = kpis.map(k =>
@@ -161,11 +214,16 @@ function renderCharts(rows) {
   });
 
   makeChart("powerChart", [
-    { label: "DC Input", data: points("dc_input_power"), borderColor: COLORS.green, tension: 0.3 },
-    { label: "AC Output", data: points("ac_output_power"), borderColor: COLORS.red, tension: 0.3 },
-    { label: "AC Input", data: points("ac_input_power"), borderColor: COLORS.blue, tension: 0.3 },
-    { label: "DC Output", data: points("dc_output_power"), borderColor: COLORS.orange, tension: 0.3 },
-  ]);
+    { type: "bar", label: "DC Input", data: points("dc_input_power"), backgroundColor: "rgba(102,187,106,0.6)", borderColor: COLORS.green, borderWidth: 1, yAxisID: "y" },
+    { type: "bar", label: "AC Output", data: points("ac_output_power"), backgroundColor: "rgba(239,83,80,0.6)", borderColor: COLORS.red, borderWidth: 1, yAxisID: "y" },
+    { type: "bar", label: "AC Input", data: points("ac_input_power"), backgroundColor: "rgba(66,165,245,0.6)", borderColor: COLORS.blue, borderWidth: 1, yAxisID: "y" },
+    { type: "bar", label: "DC Output", data: points("dc_output_power"), backgroundColor: "rgba(255,167,38,0.6)", borderColor: COLORS.orange, borderWidth: 1, yAxisID: "y" },
+    { type: "line", label: "Battery %", data: points("total_battery_percent"), borderColor: COLORS.cyan, borderWidth: 2, tension: 0.3, pointRadius: 0, yAxisID: "y1", fill: false },
+  ], {
+    y:  { position: "left",  ticks: { color: "#888" }, grid: { color: "#222" }, title: { display: true, text: "Power (W)", color: "#888" } },
+    y1: { position: "right", min: 0, max: 100, ticks: { color: COLORS.cyan, callback: v => v + "%" }, grid: { drawOnChartArea: false }, title: { display: true, text: "Battery %", color: COLORS.cyan } },
+    x: commonOpts.scales.x,
+  });
 
   makeChart("dcChart", [
     { label: "DC Power (W)", data: points("internal_dc_input_power"), borderColor: COLORS.green, tension: 0.3, yAxisID: "y" },
@@ -192,11 +250,90 @@ function renderCharts(rows) {
   });
 }
 
+function renderCalendar() {
+  const grid = document.getElementById("calendarGrid");
+  const label = document.getElementById("monthLabel");
+  const months = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  label.textContent = months[calendarMonth] + " " + calendarYear;
+
+  const dayNames = ["Mo","Tu","We","Th","Fr","Sa","Su"];
+  let html = dayNames.map(d => `<div class="day-header">${d}</div>`).join("");
+
+  const firstDay = new Date(calendarYear, calendarMonth, 1);
+  let startDow = firstDay.getDay();
+  startDow = startDow === 0 ? 6 : startDow - 1;
+
+  const daysInMonth = new Date(calendarYear, calendarMonth + 1, 0).getDate();
+  const today = todayStr();
+
+  for (let i = 0; i < startDow; i++) {
+    html += `<div class="day empty"></div>`;
+  }
+
+  for (let d = 1; d <= daysInMonth; d++) {
+    const ds = `${calendarYear}-${String(calendarMonth + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    const hasData = availableDates.has(ds);
+    const isSelected = ds === selectedDate;
+    const isToday = ds === today;
+    let cls = "day";
+    if (hasData) cls += " has-data";
+    if (isSelected) cls += " selected";
+    if (isToday) cls += " today";
+    html += `<button class="${cls}" data-date="${ds}" ${!hasData ? 'disabled' : ''}>${d}</button>`;
+  }
+
+  grid.innerHTML = html;
+  grid.querySelectorAll("button.day[data-date]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const date = btn.dataset.date;
+      if (availableDates.has(date)) {
+        selectedDate = date;
+        renderCalendar();
+        loadData();
+      }
+    });
+  });
+}
+
+function navMonth(delta) {
+  calendarMonth += delta;
+  if (calendarMonth < 0) { calendarMonth = 11; calendarYear--; }
+  if (calendarMonth > 11) { calendarMonth = 0; calendarYear++; }
+  renderCalendar();
+}
+
+function goToday() {
+  const today = todayStr();
+  const d = new Date();
+  calendarYear = d.getFullYear();
+  calendarMonth = d.getMonth();
+  selectedDate = availableDates.has(today) ? today : null;
+  renderCalendar();
+  loadData();
+}
+
+async function loadDates() {
+  try {
+    const res = await fetch("/api/dates");
+    const { dates } = await res.json();
+    availableDates = new Set(dates);
+  } catch (e) {
+    console.error("Failed to load dates:", e);
+  }
+}
+
 async function loadData() {
   try {
-    const res = await fetch("/api/data");
+    const params = selectedDate ? `?date=${selectedDate}` : "";
+    const res = await fetch("/api/data" + params);
     const { rows, prediction, dailyTotal } = await res.json();
-    if (!rows.length) return;
+    if (!rows.length) {
+      document.getElementById("kpiRow").innerHTML = '<div style="color:#888;padding:20px;text-align:center;grid-column:1/-1;">No data for this date</div>';
+      Object.values(charts).forEach(c => c.destroy());
+      charts = {};
+      document.getElementById("predictionBar").style.display = "none";
+      return;
+    }
     window._dailyTotal = dailyTotal;
     document.getElementById("count").textContent = rows.length;
     document.getElementById("lastUpdate").textContent = new Date().toLocaleTimeString();
@@ -210,14 +347,26 @@ async function loadData() {
 
 function startAutoRefresh() {
   clearInterval(refreshTimer);
-  if (document.getElementById("autoRefresh").checked) {
+  if (document.getElementById("autoRefresh").checked && (!selectedDate || selectedDate === todayStr())) {
     refreshTimer = setInterval(loadData, 10000);
   }
 }
 
 document.getElementById("autoRefresh").addEventListener("change", startAutoRefresh);
-loadData();
-startAutoRefresh();
+
+async function init() {
+  await loadDates();
+  const today = todayStr();
+  selectedDate = availableDates.has(today) ? today : (availableDates.size > 0 ? [...availableDates].sort().pop() : null);
+  const d = selectedDate ? new Date(selectedDate + "T12:00:00") : new Date();
+  calendarYear = d.getFullYear();
+  calendarMonth = d.getMonth();
+  renderCalendar();
+  loadData();
+  startAutoRefresh();
+}
+
+init();
 </script>
 </body>
 </html>
