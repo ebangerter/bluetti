@@ -219,7 +219,7 @@ def db_init(conn):
         print(f"  WARNING: DB init failed: {e}", file=sys.stderr)
 
 
-def db_insert_row(conn, row):
+def db_insert_row(conn, row, reading_time=None):
     if conn is None:
         return
     values = []
@@ -234,6 +234,7 @@ def db_insert_row(conn, row):
         with conn.cursor() as cur:
             cur.execute(DB_INSERT_SQL, values)
         conn.commit()
+        print(f"  DB INSERT OK: {reading_time}")
     except Exception as e:
         print(f"  WARNING: DB insert failed: {e}", file=sys.stderr)
 
@@ -399,13 +400,13 @@ async def read_device(address, loop_count=1, interval=5, csv_writer=None, csv_fi
                         row[col] = all_results[col][0]
                 csv_writer.writerow(row)
                 csv_file.flush()
-                db_insert_row(db_conn, row)
+                db_insert_row(db_conn, row, reading_time)
             elif db_conn and all_results:
                 row = {"timestamp": reading_time}
                 for col in CSV_COLUMNS[1:]:
                     if col in all_results:
                         row[col] = all_results[col][0]
-                db_insert_row(db_conn, row)
+                db_insert_row(db_conn, row, reading_time)
 
             if loop < loop_count - 1:
                 await asyncio.sleep(interval)

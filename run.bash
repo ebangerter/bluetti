@@ -1,1 +1,1 @@
-python bluetti_reader.py -a CF:DD:53:11:F4:72 --csv data.csv
+python bluetti_reader.py -a CF:DD:53:11:F4:72 --csv data.csv --mysql --loop 0 --interval 60

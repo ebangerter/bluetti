@@ -15,27 +15,5 @@ services:
       timeout: 3s
       retries: 10
 
-  bluetti:
-    build: .
-    network_mode: host
-    depends_on:
-      db:
-        condition: service_healthy
-    environment:
-      TZ: "Asia/Manila"
-      BLUETTI_DB_HOST: "127.0.0.1"
-      BLUETTI_DB_PORT: "3390"
-      BLUETTI_DB_PASSWORD: kilroy
-      BLUETTI_MAC: "CF:DD:53:11:F4:72"
-      DBUS_SYSTEM_BUS_ADDRESS: "unix:path=/var/run/dbus/system_bus_socket"
-    volumes:
-      - bluetti_data:/data
-      - /var/run/dbus:/var/run/dbus:ro
-      - /sys/class/bluetooth:/sys/class/bluetooth:ro
-      - /etc/localtime:/etc/localtime:ro
-    privileged: true
-    restart: always
-
 volumes:
   db_data:
-  bluetti_data:
