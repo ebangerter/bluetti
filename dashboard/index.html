@@ -209,7 +209,7 @@ function renderCharts(rows) {
     { label: "Battery Voltage", data: points("total_battery_voltage"), borderColor: COLORS.cyan, yAxisID: "y1", tension: 0.3 },
   ], {
     y: { position: "left", min: 0, max: 100, ticks: { color: COLORS.green, callback: v => v + "%" }, grid: { color: "#222" } },
-    y1: { position: "right", ticks: { color: COLORS.cyan, callback: v => v + "V" }, grid: { drawOnChartArea: false } },
+    y1: { position: "right", ticks: { color: COLORS.cyan, callback: v => v.toFixed(2) + "V" }, grid: { drawOnChartArea: false } },
     x: commonOpts.scales.x,
   });
 
