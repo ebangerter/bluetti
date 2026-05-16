@@ -1,0 +1,43 @@
+  Database schema ready
+Logging to /home/ebangert/DEV/bluetti/data.csv + MariaDB (inf readings, every 60s)
+Scanning for CF:DD:53:11:F4:72...
+Connecting to CF:DD:53:11:F4:72...
+Traceback (most recent call last):
+  File "/home/ebangert/DEV/bluetti/bluetti_reader.py", line 602, in <module>
+    main()
+    ~~~~^^
+  File "/home/ebangert/DEV/bluetti/bluetti_reader.py", line 593, in main
+    asyncio.run(read_device(args.address, loop_count, interval, csv_writer, csv_file, db_conn))
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/asyncio/runners.py", line 204, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/usr/lib/python3.14/asyncio/runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/usr/lib/python3.14/asyncio/base_events.py", line 719, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "/home/ebangert/DEV/bluetti/bluetti_reader.py", line 373, in read_device
+    async with BleakClient(device) as client:
+               ~~~~~~~~~~~^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/bleak/__init__.py", line 601, in __aenter__
+    await self.connect()
+  File "/usr/lib/python3.14/site-packages/bleak/__init__.py", line 623, in connect
+    await self._backend.connect(self._pair_before_connect, **kwargs)
+  File "/usr/lib/python3.14/site-packages/bleak/backends/bluezdbus/client.py", line 355, in connect
+    await self._get_services(
+        dangerous_use_bleak_cache=dangerous_use_bleak_cache
+    )
+  File "/usr/lib/python3.14/site-packages/bleak/backends/bluezdbus/client.py", line 707, in _get_services
+    self.services = await manager.get_services(
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        self._device_path, dangerous_use_bleak_cache, self._requested_services
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib/python3.14/site-packages/bleak/backends/bluezdbus/manager.py", line 719, in get_services
+    await self._wait_for_services_discovery(device_path)
+  File "/usr/lib/python3.14/site-packages/bleak/backends/bluezdbus/manager.py", line 889, in _wait_for_services_discovery
+    raise BleakError("failed to discover services, device disconnected")
+bleak.exc.BleakError: failed to discover services, device disconnected
