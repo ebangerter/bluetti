@@ -35,3 +35,5 @@ nohup setsid python3 "$SCRIPT_DIR/bluetti_reader.py" \
     </dev/null >"$SCRIPT_DIR/bluetti.log" 2>&1 &
 echo $! > "$PIDFILE"
 echo "Started with PID $(cat $PIDFILE)"
+cd dashboard
+nohup ./run-web.sh &
