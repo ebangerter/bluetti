@@ -1,6 +1,14 @@
-import { readFileSync } from "fs";
-import { resolve } from "path";
+import { readFileSync, existsSync, statSync } from "fs";
+import { resolve, extname } from "path";
 import mysql from "mysql2/promise";
+
+const MIME_TYPES: Record<string, string> = {
+  ".js": "application/javascript",
+  ".css": "text/css",
+  ".html": "text/html",
+  ".json": "application/json",
+  ".txt": "text/plain",
+};
 
 const DB_HOST = process.env.BLUETTI_DB_HOST || "127.0.0.1";
 const DB_PORT = parseInt(process.env.BLUETTI_DB_PORT || "3390", 10);
@@ -21,7 +29,7 @@ const pool = mysql.createPool({
   decimalNumbers: true,
 });
 
-const SELECT_COLS = `timestamp, total_battery_percent, total_battery_voltage, ac_input_power, dc_input_power, ac_output_power, dc_output_power, internal_ac_voltage, internal_current_one, internal_power_one, internal_ac_frequency, internal_dc_input_voltage, internal_dc_input_power, internal_dc_input_current, power_generation, ac_output_on, dc_output_on, pack_battery_percent, pack_voltage`;
+const SELECT_COLS = `timestamp, total_battery_percent, total_battery_voltage, ac_input_power, dc_input_power, ac_output_power, dc_output_power, internal_ac_voltage, internal_current_one, internal_power_one, internal_ac_frequency, internal_dc_input_voltage, internal_dc_input_power, internal_dc_input_current, power_generation, ac_output_on, dc_output_on, pack_battery_percent, pack_voltage, elapsed_seconds, charging_state, battery_range, net_power, power_rate`;
 
 async function readData(date?: string) {
   let sql: string;
@@ -84,18 +92,52 @@ function computePrediction(rows: any[]) {
 function computeDailyTotal(rows: any[], date: string) {
   let producedW = 0;
   let usedW = 0;
+  let chargingTimeSec = 0;
+  let dischargingTimeSec = 0;
+  let trickleTimeSec = 0;
+  let normalTimeSec = 0;
+  let fastTimeSec = 0;
+  let rangeTime = [0, 0, 0, 0];
 
   for (let i = 0; i < rows.length; i++) {
     const ts = rows[i].timestamp?.toString().slice(0, 10);
     if (ts !== date) continue;
 
-    producedW += (rows[i].dc_input_power || 0);
-    usedW += (rows[i].ac_output_power || 0) + (rows[i].dc_output_power || 0);
+    const dcIn = rows[i].dc_input_power || 0;
+    const acIn = rows[i].ac_input_power || 0;
+    const dcOut = rows[i].dc_output_power || 0;
+    const net = dcIn - dcOut;
+    const elapsed = rows[i].elapsed_seconds || 0;
+    const state = rows[i].charging_state;
+    const rate = rows[i].power_rate;
+    const br = rows[i].battery_range;
+
+    producedW += dcIn;
+    usedW += (rows[i].ac_output_power || 0) + dcOut;
+
+    if (state === 0) {
+      dischargingTimeSec += elapsed;
+    } else {
+      chargingTimeSec += elapsed;
+    }
+
+    if (rate === 0) trickleTimeSec += elapsed;
+    else if (rate === 1) normalTimeSec += elapsed;
+    else if (rate === 2) fastTimeSec += elapsed;
+
+    if (br >= 0 && br <= 3) rangeTime[br] += elapsed;
   }
 
+  const fmtHour = (sec: number) => (sec / 3600).toFixed(1) + "h";
   return {
     producedW: Math.round(producedW),
     usedW: Math.round(usedW),
+    chargingTime: fmtHour(chargingTimeSec),
+    dischargingTime: fmtHour(dischargingTimeSec),
+    trickleTime: fmtHour(trickleTimeSec),
+    normalTime: fmtHour(normalTimeSec),
+    fastTime: fmtHour(fastTimeSec),
+    rangeTime,
   };
 }
 
@@ -103,6 +145,16 @@ const server = Bun.serve({
   port: 5000,
   async fetch(req) {
     const url = new URL(req.url);
+    console.log("Request:", url.pathname);
+
+    const filePath = resolve(import.meta.dir, "." + url.pathname);
+    if (existsSync(filePath) && !statSync(filePath).isDirectory()) {
+      const ext = extname(filePath);
+      const mime = MIME_TYPES[ext] || "application/octet-stream";
+      return new Response(readFileSync(filePath), {
+        headers: { "Content-Type": mime, "Cache-Control": "no-cache" },
+      });
+    }
 
     if (url.pathname === "/api/dates") {
       const dates = await readAvailableDates();

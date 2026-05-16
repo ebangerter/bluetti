@@ -30,7 +30,12 @@ CREATE TABLE IF NOT EXISTS readings (
     ac_output_on            TINYINT(1) NOT NULL DEFAULT 0,
     dc_output_on            TINYINT(1) NOT NULL DEFAULT 0,
     pack_battery_percent    INT,
-    pack_voltage            DECIMAL(10,4)
+    pack_voltage            DECIMAL(10,4),
+    elapsed_seconds         INT,
+    charging_state          TINYINT(1) NOT NULL DEFAULT 0,
+    battery_range           TINYINT(1) NOT NULL DEFAULT 0,
+    net_power               INT,
+    power_rate              TINYINT(1) NOT NULL DEFAULT 0
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 """
 

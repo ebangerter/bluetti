@@ -4,7 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Bluetti AC200MAX Dashboard</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="js/chart.umd.min.js"></script>
+<script src="js/chartjs-adapter-date-fns.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -98,6 +99,7 @@
     <div class="chart-card"><h3>Power Flow</h3><canvas id="powerChart"></canvas></div>
     <div class="chart-card"><h3>DC Input (Solar)</h3><canvas id="dcChart"></canvas></div>
     <div class="chart-card"><h3>AC Output</h3><canvas id="acChart"></canvas></div>
+    <div class="chart-card"><h3>Charging KPIs</h3><canvas id="kpiChart"></canvas></div>
   </div>
   <div class="refresh-row">
     <button onclick="loadData()">Refresh</button>
@@ -161,6 +163,12 @@ function fmtTime(iso) {
 function renderKPIs(rows) {
   const last = rows[rows.length - 1];
   if (!last) return;
+  const CHARGING_LABELS = ["Not Charging", "DC", "AC", "AC+DC"];
+  const RATE_LABELS = ["Trickle", "Normal", "Fast"];
+  const RANGE_LABELS = ["0-25%", "25-50%", "50-75%", "75-100%"];
+  const netPower = last.net_power;
+  const netSign = netPower >= 0 ? "+" : "";
+
   const kpis = [
     { val: last.total_battery_percent, unit: "%", label: "Battery", cls: "green" },
     { val: last.total_battery_voltage?.toFixed(2), unit: "V", label: "Battery Voltage", cls: "cyan" },
@@ -170,6 +178,10 @@ function renderKPIs(rows) {
     { val: last.internal_current_one, unit: "A", label: "AC Current", cls: "orange" },
     { val: last.internal_ac_frequency, unit: "Hz", label: "AC Freq", cls: "purple" },
     { val: last.ac_output_on ? "ON" : "OFF", unit: "", label: "AC Output", cls: last.ac_output_on ? "green" : "red" },
+    { val: CHARGING_LABELS[last.charging_state] || "?", unit: "", label: "Charging Mode", cls: last.charging_state > 0 ? "green" : "red" },
+    { val: `${netSign}${netPower}`, unit: "W", label: "Net Power", cls: netPower > 0 ? "green" : "red" },
+    { val: RATE_LABELS[last.power_rate] || "?", unit: "", label: "Charge Rate", cls: last.power_rate === 2 ? "blue" : last.power_rate === 1 ? "yellow" : "orange" },
+    { val: RANGE_LABELS[last.battery_range] || "?", unit: "", label: "Battery Range", cls: "cyan" },
   ];
 
   if (window._dailyTotal) {
@@ -246,6 +258,15 @@ function renderCharts(rows) {
     y1: { position: "right", ticks: { color: COLORS.blue }, grid: { drawOnChartArea: false } },
     y2: { display: false },
     y3: { display: false },
+    x: commonOpts.scales.x,
+  });
+
+  makeChart("kpiChart", [
+    { label: "Net Power (W)", data: points("net_power"), borderColor: COLORS.green, tension: 0.3, yAxisID: "y" },
+    { label: "Charging State", data: points("charging_state"), borderColor: COLORS.blue, yAxisID: "y1", tension: 0 },
+  ], {
+    y:  { position: "left",  ticks: { color: COLORS.green }, grid: { color: "#222" } },
+    y1: { position: "right", min: 0, max: 4, ticks: { color: COLORS.blue, callback: v => ["N", "DC", "AC", "AC+DC"][v] || v }, grid: { drawOnChartArea: false } },
     x: commonOpts.scales.x,
   });
 }

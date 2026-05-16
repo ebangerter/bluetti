@@ -42,7 +42,58 @@ DEVICE_NAME_UUID = "00002a00-0000-1000-8000-00805f9b34fb"
 RESPONSE_TIMEOUT = 10
 MAX_RETRIES = 3
 
+CHARGING_THRESHOLD_W = 5
+FAST_CHARGE_THRESHOLD_W = 500
+TRICKLE_CHARGE_THRESHOLD_W = 100
+
 OUTPUT_MODES = {0: "STOP", 1: "Inverter", 2: "Bypass C", 3: "Bypass D", 4: "Load Matching"}
+
+
+def compute_charging_state(dc_input_power, ac_input_power):
+    dc_active = dc_input_power > CHARGING_THRESHOLD_W
+    ac_active = ac_input_power > CHARGING_THRESHOLD_W
+    if dc_active and ac_active:
+        return 3
+    if dc_active:
+        return 1
+    if ac_active:
+        return 2
+    return 0
+
+
+CHARGING_STATE_LABELS = {0: "None", 1: "DC", 2: "AC", 3: "AC+DC"}
+
+
+def compute_battery_range(pct):
+    if pct is None:
+        return None
+    if pct <= 25:
+        return 0
+    if pct <= 50:
+        return 1
+    if pct <= 75:
+        return 2
+    return 3
+
+
+BATTERY_RANGE_LABELS = {0: "0-25%", 1: "25-50%", 2: "50-75%", 3: "75-100%"}
+
+
+def compute_power_rate(net_power):
+    if net_power is None:
+        return None
+    if net_power < TRICKLE_CHARGE_THRESHOLD_W:
+        return 0
+    if net_power < FAST_CHARGE_THRESHOLD_W:
+        return 1
+    return 2
+
+
+POWER_RATE_LABELS = {0: "Trickle", 1: "Normal", 2: "Fast"}
+
+
+def compute_net_power(dc_input_power, dc_output_power):
+    return dc_input_power - dc_output_power
 
 
 class Field:
@@ -161,6 +212,11 @@ CSV_COLUMNS = [
     "dc_output_on",
     "pack_battery_percent",
     "pack_voltage",
+    "elapsed_seconds",
+    "charging_state",
+    "battery_range",
+    "net_power",
+    "power_rate",
 ]
 
 DB_INSERT_SQL = f"""
@@ -209,10 +265,24 @@ def db_init(conn):
                     ac_output_on            TINYINT(1) NOT NULL DEFAULT 0,
                     dc_output_on            TINYINT(1) NOT NULL DEFAULT 0,
                     pack_battery_percent    INT,
-                    pack_voltage            DECIMAL(10,4)
+                    pack_voltage            DECIMAL(10,4),
+                    elapsed_seconds         INT,
+                    charging_state          TINYINT(1) NOT NULL DEFAULT 0,
+                    battery_range           TINYINT(1) NOT NULL DEFAULT 0,
+                    net_power               INT,
+                    power_rate              TINYINT(1) NOT NULL DEFAULT 0
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """)
             cur.execute("CREATE INDEX IF NOT EXISTS idx_readings_timestamp ON readings(timestamp)")
+            new_cols = [
+                ("elapsed_seconds", "INT"),
+                ("charging_state", "TINYINT(1) NOT NULL DEFAULT 0"),
+                ("battery_range", "TINYINT(1) NOT NULL DEFAULT 0"),
+                ("net_power", "INT"),
+                ("power_rate", "TINYINT(1) NOT NULL DEFAULT 0"),
+            ]
+            for col_name, col_def in new_cols:
+                cur.execute(f"ALTER TABLE readings ADD COLUMN IF NOT EXISTS {col_name} {col_def}")
         conn.commit()
         print("  Database schema ready")
     except Exception as e:
@@ -312,9 +382,17 @@ async def read_device(address, loop_count=1, interval=5, csv_writer=None, csv_fi
         await client.start_notify(NOTIFY_UUID, notification_handler)
 
         loop = 0
+        last_reading_time = None
         while loop < loop_count:
             all_results = {}
             reading_time = time.strftime("%Y-%m-%d %H:%M:%S")
+            reading_ts = time.time()
+
+            if last_reading_time is not None:
+                elapsed = int(reading_ts - last_reading_time)
+            else:
+                elapsed = 0
+            last_reading_time = reading_ts
 
             for start_addr, quantity in POLLING_REGISTERS:
                 cmd = build_read_command(start_addr, quantity)
@@ -393,11 +471,37 @@ async def read_device(address, loop_count=1, interval=5, csv_writer=None, csv_fi
                 print(f"  Pack Voltage:    {format_val(all_results, 'pack_voltage')}")
                 print(f"  Pack Battery:    {format_val(all_results, 'pack_battery_percent')}")
 
+                dc_input = all_results.get("dc_input_power", (0, ""))[0] or 0
+                ac_input = all_results.get("ac_input_power", (0, ""))[0] or 0
+                dc_output = all_results.get("dc_output_power", (0, ""))[0] or 0
+                battery_pct = all_results.get("total_battery_percent", (None, ""))[0]
+
+                net_power = compute_net_power(dc_input, dc_output)
+                charging_state = compute_charging_state(dc_input, ac_input)
+                battery_range = compute_battery_range(battery_pct)
+                power_rate = compute_power_rate(net_power if charging_state > 0 else 0)
+
+                print(f"\n  --- KPIs ---")
+                state_label = CHARGING_STATE_LABELS.get(charging_state, "?")
+                rate_label = POWER_RATE_LABELS.get(power_rate, "?")
+                net_sign = "+" if net_power >= 0 else ""
+                if charging_state == 0:
+                    print(f"  Charging:        Not charging")
+                else:
+                    print(f"  Charging:        {state_label} ({dc_input}W in, {dc_output}W out) -> Net: {net_sign}{net_power}W [{rate_label}]")
+                range_label = BATTERY_RANGE_LABELS.get(battery_range, "?") if battery_range is not None else "?"
+                print(f"  Battery Range:   {range_label}")
+
             if csv_writer and all_results:
                 row = {"timestamp": reading_time}
                 for col in CSV_COLUMNS[1:]:
                     if col in all_results:
                         row[col] = all_results[col][0]
+                row["elapsed_seconds"] = elapsed
+                row["charging_state"] = charging_state
+                row["battery_range"] = battery_range if battery_range is not None else 0
+                row["net_power"] = net_power
+                row["power_rate"] = power_rate if power_rate is not None else 0
                 csv_writer.writerow(row)
                 csv_file.flush()
                 db_insert_row(db_conn, row, reading_time)
@@ -406,6 +510,11 @@ async def read_device(address, loop_count=1, interval=5, csv_writer=None, csv_fi
                 for col in CSV_COLUMNS[1:]:
                     if col in all_results:
                         row[col] = all_results[col][0]
+                row["elapsed_seconds"] = elapsed
+                row["charging_state"] = charging_state
+                row["battery_range"] = battery_range if battery_range is not None else 0
+                row["net_power"] = net_power
+                row["power_rate"] = power_rate if power_rate is not None else 0
                 db_insert_row(db_conn, row, reading_time)
 
             if loop < loop_count - 1:

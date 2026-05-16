@@ -29,6 +29,11 @@ COLUMNS = [
     "dc_output_on",
     "pack_battery_percent",
     "pack_voltage",
+    "elapsed_seconds",
+    "charging_state",
+    "battery_range",
+    "net_power",
+    "power_rate",
 ]
 
 INSERT_SQL = f"""
