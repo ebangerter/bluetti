@@ -4,6 +4,10 @@ Real-time monitoring, historical analytics, and remote control for a Bluetti AC2
 
 Built with assistance from [GLM 5.1](https://github.com/THUDM/GLM-5.1) AI model.
 
+
+<img width="3700" height="2026" alt="image" src="https://github.com/user-attachments/assets/6b8b39b5-385e-4caa-b300-2f44dd7e10e8" />
+
+
 ## Table of Contents
 
 - [Architecture](#architecture)
