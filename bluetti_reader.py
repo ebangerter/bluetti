@@ -590,7 +590,28 @@ def main():
         print(f"Logging to {' + '.join(targets)} ({loop_count} readings, every {interval}s)")
 
     try:
-        asyncio.run(read_device(args.address, loop_count, interval, csv_writer, csv_file, db_conn))
+        while True:
+            try:
+                asyncio.run(read_device(args.address, loop_count, interval, csv_writer, csv_file, db_conn))
+                break
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except Exception as e:
+                print(f"\nBLE connection lost: {e}", file=sys.stderr)
+                print("Reconnecting in 10 seconds...", file=sys.stderr)
+                time.sleep(10)
+                if use_mysql:
+                    try:
+                        if db_conn:
+                            db_conn.ping(reconnect=True)
+                        else:
+                            db_conn = db_connect()
+                            if db_conn:
+                                db_init(db_conn)
+                    except Exception:
+                        db_conn = db_connect()
+                        if db_conn:
+                            db_init(db_conn)
     finally:
         if db_conn:
             db_conn.close()
