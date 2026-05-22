@@ -73,6 +73,16 @@
   }
   .today-btn:hover { background: #1e88e5; }
 
+  .toggle-btns { display: flex; gap: 8px; align-items: center; }
+  .toggle-btn {
+    padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 12px;
+    font-weight: 600; border: 1px solid #2a2d3a; transition: all 0.15s;
+  }
+  .toggle-btn.on { background: #2e7d32; color: #fff; border-color: #2e7d32; }
+  .toggle-btn.off { background: #c62828; color: #fff; border-color: #c62828; }
+  .toggle-btn.loading { opacity: 0.5; cursor: wait; }
+  .toggle-label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
+
   .refresh-row { text-align: center; margin-top: 16px; }
   button { background: #42a5f5; color: #fff; border: none; padding: 10px 24px; border-radius: 8px; cursor: pointer; font-size: 14px; }
   button:hover { background: #1e88e5; }
@@ -81,6 +91,12 @@
 <body>
 <header>
   <h1>Bluetti AC200MAX</h1>
+  <div class="toggle-btns">
+    <span class="toggle-label">DC</span>
+    <button class="toggle-btn" id="dcToggleBtn" onclick="toggleOutput('dc')">--</button>
+    <span class="toggle-label">AC</span>
+    <button class="toggle-btn" id="acToggleBtn" onclick="toggleOutput('ac')">--</button>
+  </div>
   <div class="status">Last update: <span id="lastUpdate">--</span> &middot; <span class="live" id="count">0</span> readings</div>
 </header>
 
@@ -91,6 +107,7 @@
     <button class="nav-btn" onclick="navMonth(1)">&#9654;</button>
     <div class="calendar-grid" id="calendarGrid"></div>
     <button class="today-btn" onclick="goToday()">Today</button>
+    <span id="netPowerBadge" class="net-power-badge" style="display:none"></span>
   </div>
   <div id="predictionBar" class="prediction-bar" style="display:none"></div>
   <div class="kpi-row" id="kpiRow"></div>
@@ -168,6 +185,16 @@ function renderKPIs(rows) {
   const RANGE_LABELS = ["0-25%", "25-50%", "50-75%", "75-100%"];
   const netPower = last.net_power;
   const netSign = netPower >= 0 ? "+" : "";
+  const badge = document.getElementById("netPowerBadge");
+  badge.style.display = "inline-block";
+  badge.textContent = `Net: ${netSign}${netPower} W`;
+  badge.style.background = netPower >= 0 ? "#2e7d32" : "#c62828";
+  badge.style.color = "#fff";
+  badge.style.padding = "8px 14px";
+  badge.style.borderRadius = "8px";
+  badge.style.fontSize = "13px";
+  badge.style.marginLeft = "8px";
+  badge.style.fontWeight = "600";
 
   const kpis = [
     { val: last.total_battery_percent, unit: "%", label: "Battery", cls: "green" },
@@ -198,6 +225,7 @@ function renderKPIs(rows) {
   document.getElementById("kpiRow").innerHTML = kpis.map(k =>
     `<div class="kpi"><div class="val ${k.cls}">${k.val}<span class="unit">${k.unit}</span></div><div class="label">${k.label}</div></div>`
   ).join("");
+  updateToggleButtons(last);
 }
 
 function renderPrediction(pred) {
@@ -374,6 +402,48 @@ function startAutoRefresh() {
 }
 
 document.getElementById("autoRefresh").addEventListener("change", startAutoRefresh);
+
+function updateToggleButtons(last) {
+  if (!last) return;
+  const dcBtn = document.getElementById("dcToggleBtn");
+  const acBtn = document.getElementById("acToggleBtn");
+  if (last.dc_output_on !== undefined && last.dc_output_on !== null) {
+    dcBtn.textContent = last.dc_output_on ? "ON" : "OFF";
+    dcBtn.className = "toggle-btn " + (last.dc_output_on ? "on" : "off");
+  }
+  if (last.ac_output_on !== undefined && last.ac_output_on !== null) {
+    acBtn.textContent = last.ac_output_on ? "ON" : "OFF";
+    acBtn.className = "toggle-btn " + (last.ac_output_on ? "on" : "off");
+  }
+}
+
+async function toggleOutput(output) {
+  const btn = document.getElementById(output + "ToggleBtn");
+  const currentState = btn.textContent.trim() === "ON";
+  const newState = currentState ? "off" : "on";
+  btn.className = "toggle-btn loading";
+  btn.textContent = "...";
+  try {
+    const res = await fetch("/api/toggle", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ output, state: newState }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      btn.textContent = newState === "on" ? "ON" : "OFF";
+      btn.className = "toggle-btn " + (newState === "on" ? "on" : "off");
+    } else {
+      btn.textContent = currentState ? "ON" : "OFF";
+      btn.className = "toggle-btn " + (currentState ? "on" : "off");
+      alert("Failed: " + data.msg);
+    }
+  } catch (e) {
+    btn.textContent = currentState ? "ON" : "OFF";
+    btn.className = "toggle-btn " + (currentState ? "on" : "off");
+    alert("Error: " + e.message);
+  }
+}
 
 async function init() {
   await loadDates();

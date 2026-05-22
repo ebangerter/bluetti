@@ -319,6 +319,16 @@ def build_read_command(starting_address, quantity):
     return bytes(cmd)
 
 
+def build_write_command(register_address, value):
+    cmd = bytearray(8)
+    cmd[0] = 0x01
+    cmd[1] = 0x06
+    struct.pack_into("!HH", cmd, 2, register_address, value)
+    crc = modbus_crc(cmd[:-2])
+    struct.pack_into("<H", cmd, 6, crc)
+    return bytes(cmd)
+
+
 def expected_response_size(quantity):
     return 2 * quantity + 5
 
@@ -524,6 +534,56 @@ async def read_device(address, loop_count=1, interval=5, csv_writer=None, csv_fi
         await client.stop_notify(NOTIFY_UUID)
 
 
+async def write_device(address, register, value):
+    device = await BleakScanner.find_device_by_address(address, timeout=15)
+    if device is None:
+        raise RuntimeError(f"Device {address} not found during scan")
+    print(f"Connecting to {address}...")
+
+    async with BleakClient(device) as client:
+        response_data = bytearray()
+
+        def notification_handler(_sender, data):
+            response_data.extend(data)
+
+        await client.start_notify(NOTIFY_UUID, notification_handler)
+
+        cmd = build_write_command(register, value)
+        response_data.clear()
+        await client.write_gatt_char(WRITE_UUID, cmd)
+
+        for _ in range(RESPONSE_TIMEOUT * 10):
+            if len(response_data) >= 8:
+                break
+            await asyncio.sleep(0.1)
+
+        if len(response_data) < 8:
+            print("  ERROR: No response to write command")
+            await client.stop_notify(NOTIFY_UUID)
+            return False
+
+        resp = bytes(response_data[:8])
+        if not validate_crc(resp):
+            print("  ERROR: Invalid CRC in write response")
+            await client.stop_notify(NOTIFY_UUID)
+            return False
+
+        if resp[1] == 0x86:
+            print(f"  ERROR: Modbus write error, code {resp[2]}")
+            await client.stop_notify(NOTIFY_UUID)
+            return False
+
+        resp_reg = struct.unpack("!H", resp[2:4])[0]
+        resp_val = struct.unpack("!H", resp[4:6])[0]
+        if resp_reg == register and resp_val == value:
+            print(f"  OK: Register {register} set to {value}")
+        else:
+            print(f"  WARNING: Echo mismatch (reg={resp_reg}, val={resp_val})")
+
+        await client.stop_notify(NOTIFY_UUID)
+        return True
+
+
 def format_val(results, key):
     if key not in results:
         return "N/A"
@@ -543,7 +603,39 @@ def main():
     parser.add_argument("--interval", "-i", type=int, default=5, help="Seconds between readings (default: 5)")
     parser.add_argument("--csv", metavar="FILE", help="Log readings to CSV (defaults: --loop 180 --interval 60)")
     parser.add_argument("--mysql", action="store_true", help="Store readings in MariaDB (auto-enabled when --csv is used)")
+    parser.add_argument("--dc-on", action="store_true", help="Turn DC output ON")
+    parser.add_argument("--dc-off", action="store_true", help="Turn DC output OFF")
+    parser.add_argument("--ac-on", action="store_true", help="Turn AC output ON")
+    parser.add_argument("--ac-off", action="store_true", help="Turn AC output OFF")
     args = parser.parse_args()
+
+    write_commands = []
+    if args.dc_on:
+        write_commands.append((49, 1, "DC output ON"))
+    if args.dc_off:
+        write_commands.append((49, 0, "DC output OFF"))
+    if args.ac_on:
+        write_commands.append((48, 1, "AC output ON"))
+    if args.ac_off:
+        write_commands.append((48, 0, "AC output OFF"))
+
+    if write_commands:
+        if args.scan or not args.address:
+            devices = asyncio.run(scan())
+            if not args.address and devices:
+                args.address = devices[0].address
+                print(f"\nAuto-selecting first device: {args.address}")
+            elif not args.address:
+                print("\nNo device found. Use --address to specify a MAC address.")
+                sys.exit(1)
+        for reg, val, label in write_commands:
+            print(f"Sending: {label} (register {reg} = {val})")
+            ok = asyncio.run(write_device(args.address, reg, val))
+            if ok:
+                print(f"  {label}: success")
+            else:
+                print(f"  {label}: failed")
+        return
 
     if args.scan or not args.address:
         devices = asyncio.run(scan())

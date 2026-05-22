@@ -1,5 +1,6 @@
 import { readFileSync, existsSync, statSync } from "fs";
 import { resolve, extname } from "path";
+import { execFile } from "child_process";
 import mysql from "mysql2/promise";
 
 const MIME_TYPES: Record<string, string> = {
@@ -141,6 +142,30 @@ function computeDailyTotal(rows: any[], date: string) {
   };
 }
 
+const BLUETTI_ADDRESS = process.env.BLUETTI_MAC || "";
+const BLUETTI_SCRIPT = resolve(import.meta.dir, "..", "bluetti_reader.py");
+
+function toggleOutput(output: string, state: string): Promise<{ ok: boolean; msg: string }> {
+  return new Promise((resolve) => {
+    if (!BLUETTI_ADDRESS) {
+      resolve({ ok: false, msg: "BLUETTI_MAC env var not set" });
+      return;
+    }
+    const flag = `--${output}-${state}`;
+    execFile("python3", [BLUETTI_SCRIPT, "-a", BLUETTI_ADDRESS, flag], { timeout: 30000 }, (err, stdout, stderr) => {
+      if (err) {
+        resolve({ ok: false, msg: stderr || err.message });
+        return;
+      }
+      if (stdout.includes("success")) {
+        resolve({ ok: true, msg: `${output.toUpperCase()} output turned ${state}` });
+      } else {
+        resolve({ ok: false, msg: stdout + stderr });
+      }
+    });
+  });
+}
+
 const server = Bun.serve({
   port: 5000,
   async fetch(req) {
@@ -154,6 +179,12 @@ const server = Bun.serve({
       return new Response(readFileSync(filePath), {
         headers: { "Content-Type": mime, "Cache-Control": "no-cache" },
       });
+    }
+
+    if (url.pathname === "/api/toggle" && req.method === "POST") {
+      const body = await req.json() as { output: string; state: string };
+      const result = await toggleOutput(body.output, body.state);
+      return Response.json(result);
     }
 
     if (url.pathname === "/api/dates") {
