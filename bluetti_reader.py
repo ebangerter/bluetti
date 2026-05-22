@@ -535,9 +535,15 @@ async def read_device(address, loop_count=1, interval=5, csv_writer=None, csv_fi
 
 
 async def write_device(address, register, value):
-    device = await BleakScanner.find_device_by_address(address, timeout=15)
+    device = None
+    for attempt in range(5):
+        device = await BleakScanner.find_device_by_address(address, timeout=10)
+        if device:
+            break
+        print(f"  Scan attempt {attempt + 1}/5: device not found, retrying...")
+        await asyncio.sleep(3)
     if device is None:
-        raise RuntimeError(f"Device {address} not found during scan")
+        raise RuntimeError(f"Device {address} not found after 5 scan attempts")
     print(f"Connecting to {address}...")
 
     async with BleakClient(device) as client:

@@ -10,7 +10,7 @@ if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
 fi
 
 nohup python3 "$SCRIPT_DIR/bluetti_reader.py" \
-    -a CF:DD:53:11:F4:72 \
+    -a "${BLUETTI_MAC:-CF:DD:53:11:F4:72}" \
     --csv "$SCRIPT_DIR/data.csv" \
     --mysql \
     --loop 0 \

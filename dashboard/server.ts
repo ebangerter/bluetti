@@ -143,6 +143,24 @@ function computeDailyTotal(rows: any[], date: string) {
 
 const BLUETTI_ADDRESS = process.env.BLUETTI_MAC || "";
 const BLUETTI_SCRIPT = resolve(import.meta.dir, "..", "bluetti_reader.py");
+const READER_PIDFILE = "/tmp/bluetti_reader.pid";
+
+function stopReader(): void {
+  try {
+    const pid = parseInt(readFileSync(READER_PIDFILE, "utf-8").trim());
+    if (pid) process.kill(pid, "SIGTERM");
+  } catch {}
+  Bun.spawnSync(["pkill", "-f", "bluetti_reader.py"]);
+}
+
+function startReader(): void {
+  try {
+    Bun.spawn(["bash", resolve(import.meta.dir, "..", "run.bash")], {
+      detached: true,
+      stdio: "ignore",
+    });
+  } catch {}
+}
 
 function toggleOutput(output: string, state: string): Promise<{ ok: boolean; msg: string }> {
   return new Promise((resolve) => {
@@ -151,28 +169,33 @@ function toggleOutput(output: string, state: string): Promise<{ ok: boolean; msg
       return;
     }
     const flag = `--${output}-${state}`;
-    try {
-      const proc = Bun.spawn(["python3", BLUETTI_SCRIPT, "-a", BLUETTI_ADDRESS, flag], {
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      const exitCode = proc.exited;
-      const stdout = new Response(proc.stdout).text();
-      const stderr = new Response(proc.stderr).text();
-      Promise.all([exitCode, stdout, stderr]).then(([code, out, err]) => {
-        if (code !== 0) {
-          resolve({ ok: false, msg: err || `Process exited with code ${code}` });
-          return;
-        }
-        if (out.includes("success")) {
-          resolve({ ok: true, msg: `${output.toUpperCase()} output turned ${state}` });
-        } else {
-          resolve({ ok: false, msg: out + err });
-        }
-      });
-    } catch (e: any) {
-      resolve({ ok: false, msg: e.message || "Failed to execute command" });
-    }
+    stopReader();
+    setTimeout(() => {
+      try {
+        const proc = Bun.spawn(["python3", BLUETTI_SCRIPT, "-a", BLUETTI_ADDRESS, flag], {
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const exitCode = proc.exited;
+        const stdout = new Response(proc.stdout).text();
+        const stderr = new Response(proc.stderr).text();
+        Promise.all([exitCode, stdout, stderr]).then(([code, out, err]) => {
+          startReader();
+          if (code !== 0) {
+            resolve({ ok: false, msg: err || `Process exited with code ${code}` });
+            return;
+          }
+          if (out.includes("success")) {
+            resolve({ ok: true, msg: `${output.toUpperCase()} output turned ${state}` });
+          } else {
+            resolve({ ok: false, msg: out + err });
+          }
+        });
+      } catch (e: any) {
+        startReader();
+        resolve({ ok: false, msg: e.message || "Failed to execute command" });
+      }
+    }, 8000);
   });
 }
 
