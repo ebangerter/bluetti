@@ -1,6 +1,5 @@
 import { readFileSync, existsSync, statSync } from "fs";
 import { resolve, extname } from "path";
-import { execFile } from "child_process";
 import mysql from "mysql2/promise";
 
 const MIME_TYPES: Record<string, string> = {
@@ -152,17 +151,28 @@ function toggleOutput(output: string, state: string): Promise<{ ok: boolean; msg
       return;
     }
     const flag = `--${output}-${state}`;
-    execFile("python3", [BLUETTI_SCRIPT, "-a", BLUETTI_ADDRESS, flag], { timeout: 30000 }, (err, stdout, stderr) => {
-      if (err) {
-        resolve({ ok: false, msg: stderr || err.message });
-        return;
-      }
-      if (stdout.includes("success")) {
-        resolve({ ok: true, msg: `${output.toUpperCase()} output turned ${state}` });
-      } else {
-        resolve({ ok: false, msg: stdout + stderr });
-      }
-    });
+    try {
+      const proc = Bun.spawn(["python3", BLUETTI_SCRIPT, "-a", BLUETTI_ADDRESS, flag], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const exitCode = proc.exited;
+      const stdout = new Response(proc.stdout).text();
+      const stderr = new Response(proc.stderr).text();
+      Promise.all([exitCode, stdout, stderr]).then(([code, out, err]) => {
+        if (code !== 0) {
+          resolve({ ok: false, msg: err || `Process exited with code ${code}` });
+          return;
+        }
+        if (out.includes("success")) {
+          resolve({ ok: true, msg: `${output.toUpperCase()} output turned ${state}` });
+        } else {
+          resolve({ ok: false, msg: out + err });
+        }
+      });
+    } catch (e: any) {
+      resolve({ ok: false, msg: e.message || "Failed to execute command" });
+    }
   });
 }
 
@@ -172,6 +182,16 @@ const server = Bun.serve({
     const url = new URL(req.url);
     console.log("Request:", url.pathname);
 
+    if (url.pathname === "/api/toggle" && req.method === "POST") {
+      try {
+        const body = await req.json() as { output: string; state: string };
+        const result = await toggleOutput(body.output, body.state);
+        return Response.json(result);
+      } catch (e: any) {
+        return Response.json({ ok: false, msg: e.message || "Invalid request" });
+      }
+    }
+
     const filePath = resolve(import.meta.dir, "." + url.pathname);
     if (existsSync(filePath) && !statSync(filePath).isDirectory()) {
       const ext = extname(filePath);
@@ -179,12 +199,6 @@ const server = Bun.serve({
       return new Response(readFileSync(filePath), {
         headers: { "Content-Type": mime, "Cache-Control": "no-cache" },
       });
-    }
-
-    if (url.pathname === "/api/toggle" && req.method === "POST") {
-      const body = await req.json() as { output: string; state: string };
-      const result = await toggleOutput(body.output, body.state);
-      return Response.json(result);
     }
 
     if (url.pathname === "/api/dates") {

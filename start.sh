@@ -26,6 +26,7 @@ if bluetoothctl info CF:DD:53:11:F4:72 2>/dev/null | grep -q "Connected: yes"; t
 fi
 
 echo "Starting Bluetti reader in background..."
+export BLUETTI_MAC=CF:DD:53:11:F4:72
 nohup setsid python3 "$SCRIPT_DIR/bluetti_reader.py" \
     -a CF:DD:53:11:F4:72 \
     --csv "$SCRIPT_DIR/data.csv" \
