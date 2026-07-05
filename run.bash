@@ -6,6 +6,8 @@ PIDFILE="/tmp/bluetti_reader.pid"
 
 if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
     echo "Bluetti reader already running with PID $(cat "$PIDFILE")"
+    cd dashboard
+    ./run-web.sh
     exit 0
 fi
 
@@ -19,3 +21,5 @@ nohup python3 "$SCRIPT_DIR/bluetti_reader.py" \
 
 echo $! > "$PIDFILE"
 echo "Started Bluetti reader with PID $(cat "$PIDFILE")"
+cd dashboard
+./run-web.sh
