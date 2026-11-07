@@ -1,0 +1,24 @@
+[package]
+name = "bluetti-reader"
+version = "0.1.0"
+edition = "2021"
+description = "Read current values from a Bluetti AC200MAX over Bluetooth LE"
+
+[[bin]]
+name = "bluetti-reader"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+btleplug = "0.11"
+chrono = "0.4"
+clap = { version = "4", features = ["derive"] }
+csv = "1"
+futures = "0.3"
+mysql = { version = "26", default-features = false, features = ["minimal"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+uuid = "1"
+
+[profile.release]
+opt-level = 2
+strip = true

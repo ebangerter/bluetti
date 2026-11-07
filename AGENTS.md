@@ -22,9 +22,16 @@ python bluetti_reader.py --address <MAC>
 python bluetti_reader.py -a <MAC> --loop 0 --interval 10
 ```
 
+## Rust port
+
+`rust/` holds `bluetti-reader`, a Rust binary with the same register map, CSV columns, KPI
+definitions and CLI flags. Build with `cargo build --release` (binary at
+`rust/target/release/bluetti-reader`), test with `cargo test`. See `rust/README.md`.
+
 ## Notes
 
 - Requires a Bluetooth adapter with BLE support on the host machine.
 - Communicates via BLE GATT characteristics (`ff01`/`ff02`) using Modbus RTU framing.
-- No tests, no build step, no virtual environment configuration in repo.
+- The device accepts ONE BLE connection — never run the Python and Rust readers at once.
 - Protocol details (register addresses, field types) are hardcoded in `AC200M_FIELDS` and `POLLING_REGISTERS`.
+- `net_power` is `(dc_in + ac_in) - (ac_out + dc_out)`; `power_rate` is derived from it.
