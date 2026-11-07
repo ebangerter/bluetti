@@ -1,0 +1,25 @@
+{
+    "$schema": "https://github.com/AvengeMedia/DankMaterialShell/raw/refs/heads/master/PLUGINS/plugin-schema.json",
+    "id": "bluettiMonitor",
+    "name": "Bluetti Monitor",
+    "description": "Live Bluetti AC200MAX battery, solar input and output power, read from the local MariaDB archive.",
+    "version": "1.0.0",
+    "author": "ebangert",
+    "license": "MIT",
+    "icon": "solar_power",
+    "type": "widget",
+    "dependencies": [
+        "mariadb"
+    ],
+    "capabilities": [
+        "dankbar-widget"
+    ],
+    "component": "./BluettiWidget.qml",
+    "settings": "./BluettiSettings.qml",
+    "requires_dms": ">=1.2.0",
+    "permissions": [
+        "settings_read",
+        "settings_write",
+        "process"
+    ]
+}
