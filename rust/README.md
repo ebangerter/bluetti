@@ -75,6 +75,8 @@ unit by writing `~/.config/bluetti/collector.env`:
     BLUETTI_DB_PORT=3390
 
 `Restart=always` with `RestartSec=15` covers Bluetooth or the database not being up yet.
+The reader also exits non-zero after 5 captures in a row fail (about 5 minutes at the 60 s
+interval), so a wedged BLE stack is replaced by a fresh process instead of retrying forever.
 `TimeoutStopSec=120` is deliberate: a stop must leave the reader room to finish its current
 Modbus cycle and disconnect, because a SIGKILL would strand the link (see below).
 

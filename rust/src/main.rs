@@ -466,6 +466,32 @@ fn spawn_shutdown_watch() -> watch::Receiver<bool> {
     rx
 }
 
+/// A long-running collector gives up after this many captures in a row fail.
+/// The BLE stack inside the process can get wedged (e.g. it started before the
+/// adapter was ready) and no amount of in-process retrying clears it, so the
+/// process exits and lets the service manager start a fresh one.
+const MAX_CONSECUTIVE_FAILURES: u32 = 5;
+
+/// Returned by `read_device` when every recent capture failed. `main` turns it
+/// into a non-zero exit, which systemd's `Restart=always` answers with a restart.
+#[derive(Debug)]
+struct CaptureStuck {
+    failures: u32,
+    last_error: String,
+}
+
+impl std::fmt::Display for CaptureStuck {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} captures in a row failed (last: {}); exiting so the service restarts",
+            self.failures, self.last_error
+        )
+    }
+}
+
+impl std::error::Error for CaptureStuck {}
+
 /// Capture `loop_count` readings, connecting and disconnecting around each one
 /// so the device's single BLE slot is free between captures.
 async fn read_device(address: &str, session: &mut Session<'_>) -> Result<()> {
@@ -474,6 +500,7 @@ async fn read_device(address: &str, session: &mut Session<'_>) -> Result<()> {
 
     let mut index: u64 = 0;
     let mut last_reading: Option<Instant> = None;
+    let mut consecutive_failures: u32 = 0;
 
     while infinite || index < session.loop_count {
         if *session.shutdown.borrow() {
@@ -482,10 +509,21 @@ async fn read_device(address: &str, session: &mut Session<'_>) -> Result<()> {
 
         let cycle_start = Instant::now();
         match capture_once(address, session, index, total, &mut last_reading).await {
-            Ok(()) => {}
+            Ok(()) => consecutive_failures = 0,
             // A long-running collector rides out a failed capture and keeps its
-            // cadence; a bounded run reports the failure to the caller.
-            Err(e) if infinite => eprintln!("  WARNING: capture failed: {}", e),
+            // cadence, until too many fail in a row; a bounded run reports the
+            // failure to the caller.
+            Err(e) if infinite => {
+                eprintln!("  WARNING: capture failed: {}", e);
+                consecutive_failures += 1;
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                    return Err(CaptureStuck {
+                        failures: consecutive_failures,
+                        last_error: e.to_string(),
+                    }
+                    .into());
+                }
+            }
             Err(e) => return Err(e),
         }
 
@@ -727,6 +765,9 @@ async fn main() -> Result<()> {
             Err(e) => {
                 if *shutdown.borrow() {
                     break;
+                }
+                if e.is::<CaptureStuck>() {
+                    return Err(e);
                 }
                 eprintln!("\nBLE connection lost: {}", e);
                 eprintln!("Reconnecting in 10 seconds...");
