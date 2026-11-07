@@ -23,6 +23,8 @@ PluginComponent {
     property bool loading: true
     property string errorText: ""
     property double ageSecs: 0
+    /// [unixSeconds, batteryPercent] pairs for the last 24 hours.
+    property var history: []
 
     readonly property bool hasData: reading !== null
     readonly property bool stale: hasData && ageSecs > staleSecs
@@ -66,18 +68,29 @@ PluginComponent {
         + "'generation', power_generation"
         + ") FROM readings ORDER BY timestamp DESC LIMIT 1;"
 
+    // Battery percentage over the last 24 h, averaged into 10 minute buckets.
+    // The window is anchored on the newest row rather than NOW() because the
+    // MariaDB container runs on UTC while the collector writes host-local times.
+    readonly property string historySql: "SELECT COALESCE(JSON_ARRAYAGG(JSON_ARRAY(t, p)), '[]') FROM ("
+        + "SELECT MIN(UNIX_TIMESTAMP(timestamp)) AS t, ROUND(AVG(total_battery_percent)) AS p"
+        + " FROM readings"
+        + " WHERE timestamp >= (SELECT MAX(timestamp) FROM readings) - INTERVAL 24 HOUR"
+        + " AND total_battery_percent IS NOT NULL"
+        + " GROUP BY FLOOR(UNIX_TIMESTAMP(timestamp) / 600)"
+        + " ORDER BY t) q;"
+
     function shq(value) {
         return "'" + String(value).replace(/'/g, "'\\''") + "'"
     }
 
-    function buildCommand() {
+    function buildCommand(statement) {
         return "MYSQL_PWD=" + shq(dbPassword)
             + " mariadb -h" + shq(dbHost)
             + " -P" + shq(dbPort)
             + " -u" + shq(dbUser)
             + " -D" + shq(dbName)
             + " --batch --skip-column-names --raw --connect-timeout=4"
-            + " -e " + shq(sql)
+            + " -e " + shq(statement)
     }
 
     // The collector writes host-local timestamps while the MariaDB container runs
@@ -99,7 +112,7 @@ PluginComponent {
     }
 
     function fetchReading() {
-        Proc.runCommand("bluettiMonitor.query", ["sh", "-c", buildCommand()], (stdout, exitCode) => {
+        Proc.runCommand("bluettiMonitor.query", ["sh", "-c", buildCommand(sql)], (stdout, exitCode) => {
             root.loading = false
             const out = (stdout || "").trim()
             if (exitCode !== 0) {
@@ -125,12 +138,42 @@ PluginComponent {
         }, 200, 8000)
     }
 
+    function fetchHistory() {
+        Proc.runCommand("bluettiMonitor.history", ["sh", "-c", buildCommand(historySql)], (stdout, exitCode) => {
+            if (exitCode !== 0) {
+                return
+            }
+            const out = (stdout || "").trim()
+            if (out.length === 0) {
+                root.history = []
+                return
+            }
+            try {
+                const parsed = JSON.parse(out)
+                // JSON_ARRAYAGG does not promise ordering, so sort by timestamp.
+                parsed.sort((a, b) => a[0] - b[0])
+                root.history = parsed
+            } catch (e) {
+                root.history = []
+            }
+        }, 200, 10000)
+    }
+
     Timer {
         interval: root.refreshSecs * 1000
         running: true
         repeat: true
         triggeredOnStart: true
         onTriggered: root.fetchReading()
+    }
+
+    // The 24 h chart changes slowly; no need to redraw it on every poll.
+    Timer {
+        interval: 60000
+        running: true
+        repeat: true
+        triggeredOnStart: true
+        onTriggered: root.fetchHistory()
     }
 
     // Keeps the "updated Ns ago" label and the stale flag moving between polls.
@@ -391,7 +434,162 @@ PluginComponent {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: root.fetchReading()
+                        onClicked: {
+                            root.fetchReading()
+                            root.fetchHistory()
+                        }
+                    }
+                }
+            }
+
+            // ── 24 hour battery chart ────────────────────────────────────────
+            StyledRect {
+                width: parent.width
+                height: 150
+                radius: Theme.cornerRadius * 1.5
+                color: Qt.rgba(Theme.surfaceContainer.r, Theme.surfaceContainer.g, Theme.surfaceContainer.b, 0.5)
+                border.width: 1
+                border.color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.1)
+                clip: true
+
+                Row {
+                    anchors.top: parent.top
+                    anchors.topMargin: Theme.spacingS
+                    anchors.left: parent.left
+                    anchors.leftMargin: Theme.spacingM
+                    spacing: Theme.spacingXS
+
+                    DankIcon {
+                        name: "show_chart"
+                        size: 14
+                        color: Theme.primary
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    StyledText {
+                        text: "Battery · last 24 h"
+                        font.pixelSize: Theme.fontSizeSmall
+                        font.weight: Font.Bold
+                        color: Theme.surfaceText
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+
+                StyledText {
+                    anchors.centerIn: parent
+                    visible: !root.history || root.history.length < 2
+                    text: "Not enough history yet"
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.surfaceVariantText
+                }
+
+                Canvas {
+                    id: chart
+                    anchors.fill: parent
+                    anchors.topMargin: 26
+                    anchors.bottomMargin: Theme.spacingS
+                    anchors.leftMargin: Theme.spacingM
+                    anchors.rightMargin: Theme.spacingM
+                    visible: root.history && root.history.length >= 2
+                    antialiasing: true
+
+                    // Room on the left for the 0/50/100 labels.
+                    readonly property int gutter: 26
+
+                    Connections {
+                        target: root
+                        function onHistoryChanged() {
+                            chart.requestPaint()
+                        }
+                    }
+
+                    onPaint: {
+                        const ctx = getContext("2d")
+                        ctx.reset()
+
+                        const points = root.history
+                        if (!points || points.length < 2)
+                            return
+
+                        const left = gutter
+                        const right = width
+                        const top = 10
+                        const bottom = height - 14
+                        const plotWidth = right - left
+                        const plotHeight = bottom - top
+                        if (plotWidth <= 0 || plotHeight <= 0)
+                            return
+
+                        // Fixed 24 h window ending at the newest sample, so gaps
+                        // in collection show as gaps rather than being stretched.
+                        const tEnd = points[points.length - 1][0]
+                        const tStart = tEnd - 24 * 3600
+                        const span = Math.max(1, tEnd - tStart)
+
+                        const xAt = t => left + ((t - tStart) / span) * plotWidth
+                        const yAt = pct => bottom - (Math.max(0, Math.min(100, pct)) / 100) * plotHeight
+
+                        // Horizontal guides at 0 / 25 / 50 / 75 / 100 %.
+                        ctx.lineWidth = 1
+                        ctx.font = "9px sans-serif"
+                        ctx.textAlign = "right"
+                        ctx.textBaseline = "middle"
+                        for (const pct of [0, 25, 50, 75, 100]) {
+                            const y = yAt(pct)
+                            ctx.strokeStyle = Qt.rgba(Theme.surfaceVariantText.r, Theme.surfaceVariantText.g,
+                                                      Theme.surfaceVariantText.b, pct === 0 || pct === 100 ? 0.25 : 0.12)
+                            ctx.beginPath()
+                            ctx.moveTo(left, y)
+                            ctx.lineTo(right, y)
+                            ctx.stroke()
+
+                            if (pct % 50 === 0) {
+                                ctx.fillStyle = Qt.rgba(Theme.surfaceVariantText.r, Theme.surfaceVariantText.g,
+                                                        Theme.surfaceVariantText.b, 0.8)
+                                ctx.fillText(pct + "%", left - 4, y)
+                            }
+                        }
+
+                        // Filled area under the curve.
+                        const gradient = ctx.createLinearGradient(0, top, 0, bottom)
+                        gradient.addColorStop(0, Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.35))
+                        gradient.addColorStop(1, Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.02))
+
+                        ctx.beginPath()
+                        ctx.moveTo(xAt(points[0][0]), bottom)
+                        for (const point of points)
+                            ctx.lineTo(xAt(point[0]), yAt(point[1]))
+                        ctx.lineTo(xAt(points[points.length - 1][0]), bottom)
+                        ctx.closePath()
+                        ctx.fillStyle = gradient
+                        ctx.fill()
+
+                        // The curve itself.
+                        ctx.beginPath()
+                        ctx.moveTo(xAt(points[0][0]), yAt(points[0][1]))
+                        for (const point of points)
+                            ctx.lineTo(xAt(point[0]), yAt(point[1]))
+                        ctx.strokeStyle = Theme.primary
+                        ctx.lineWidth = 2
+                        ctx.lineJoin = "round"
+                        ctx.stroke()
+
+                        // Marker on the newest sample.
+                        const lastX = xAt(points[points.length - 1][0])
+                        const lastY = yAt(points[points.length - 1][1])
+                        ctx.beginPath()
+                        ctx.arc(lastX, lastY, 3, 0, 2 * Math.PI)
+                        ctx.fillStyle = Theme.primary
+                        ctx.fill()
+
+                        // Time axis ends.
+                        ctx.fillStyle = Qt.rgba(Theme.surfaceVariantText.r, Theme.surfaceVariantText.g,
+                                                Theme.surfaceVariantText.b, 0.8)
+                        ctx.textBaseline = "top"
+                        ctx.textAlign = "left"
+                        ctx.fillText("-24 h", left, bottom + 3)
+                        ctx.textAlign = "right"
+                        ctx.fillText("now", right, bottom + 3)
                     }
                 }
             }

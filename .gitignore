@@ -1,5 +1,7 @@
 data.csv
 *.png
+# Documentation screenshots are intentionally tracked.
+!dmsplugin/bluettiMonitor/*.png
 node_modules/
 __pycache__/
 nohup.out

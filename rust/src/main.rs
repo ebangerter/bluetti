@@ -151,7 +151,7 @@ struct Link {
 }
 
 impl Link {
-    async fn open(peripheral: Peripheral) -> Result<Self> {
+    async fn open(peripheral: Peripheral, announce: bool) -> Result<Self> {
         peripheral.connect().await.context("BLE connect failed")?;
         peripheral.discover_services().await?;
 
@@ -166,8 +166,10 @@ impl Link {
         let write_char = find(WRITE_UUID)?;
         let notify_char = find(NOTIFY_UUID)?;
 
-        if let Ok(name) = peripheral.read(&find(DEVICE_NAME_UUID)?).await {
-            println!("Connected to: {}", String::from_utf8_lossy(&name));
+        if announce {
+            if let Ok(name) = peripheral.read(&find(DEVICE_NAME_UUID)?).await {
+                println!("Connected to: {}", String::from_utf8_lossy(&name));
+            }
         }
 
         peripheral.subscribe(&notify_char).await?;
@@ -436,21 +438,9 @@ fn spawn_shutdown_watch() -> watch::Receiver<bool> {
     rx
 }
 
-/// Connect once and keep polling until the requested number of readings is done.
+/// Capture `loop_count` readings, connecting and disconnecting around each one
+/// so the device's single BLE slot is free between captures.
 async fn read_device(address: &str, session: &mut Session<'_>) -> Result<()> {
-    println!("Scanning for {}...", address);
-    let peripheral = find_device(address, Duration::from_secs(15)).await?;
-    println!("Connecting to {}...", address);
-    let link = Link::open(peripheral).await?;
-
-    // The device accepts a single BLE connection, so the link must be released
-    // however the polling loop ends — success, Modbus failure or I/O error.
-    let outcome = poll_loop(&link, session).await;
-    link.close().await;
-    outcome
-}
-
-async fn poll_loop(link: &Link, session: &mut Session<'_>) -> Result<()> {
     let infinite = session.loop_count == 0;
     let total = if infinite { None } else { Some(session.loop_count) };
 
@@ -462,35 +452,76 @@ async fn poll_loop(link: &Link, session: &mut Session<'_>) -> Result<()> {
             break;
         }
 
-        let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        let now = Instant::now();
-        let elapsed = last_reading.map_or(0, |prev| now.duration_since(prev).as_secs() as i64);
-        last_reading = Some(now);
-
-        let readings = poll_once(link).await?;
-
-        if !readings.is_empty() {
-            let kpis = compute_kpis(&readings, elapsed);
-            print_reading(&readings, &kpis, index, total);
-
-            let row = build_row(&readings, &timestamp, &kpis);
-            if let Some(csv) = session.csv.as_deref_mut() {
-                csv.write(&row)?;
-            }
-            if let Some(archive) = session.archive.as_deref_mut() {
-                match archive.insert(&row) {
-                    Ok(()) => println!("  DB INSERT OK: {}", timestamp),
-                    Err(e) => eprintln!("  WARNING: DB insert failed: {}", e),
-                }
-            }
+        let cycle_start = Instant::now();
+        match capture_once(address, session, index, total, &mut last_reading).await {
+            Ok(()) => {}
+            // A long-running collector rides out a failed capture and keeps its
+            // cadence; a bounded run reports the failure to the caller.
+            Err(e) if infinite => eprintln!("  WARNING: capture failed: {}", e),
+            Err(e) => return Err(e),
         }
 
         index += 1;
         if infinite || index < session.loop_count {
+            // Sleep the remainder of the period, so connect + read + disconnect
+            // time does not push each capture later than the last.
+            let remaining = session.interval.saturating_sub(cycle_start.elapsed());
             tokio::select! {
-                _ = tokio::time::sleep(session.interval) => {}
+                _ = tokio::time::sleep(remaining) => {}
                 _ = session.shutdown.changed() => break,
             }
+        }
+    }
+
+    Ok(())
+}
+
+/// One connect / poll / disconnect cycle.
+async fn capture_once(
+    address: &str,
+    session: &mut Session<'_>,
+    index: u64,
+    total: Option<u64>,
+    last_reading: &mut Option<Instant>,
+) -> Result<()> {
+    // Only narrate the first cycle; a 60 s collector would otherwise write two
+    // connection lines to the journal every minute.
+    let announce = index == 0;
+    if announce {
+        println!("Scanning for {}...", address);
+    }
+    let peripheral = find_device(address, Duration::from_secs(15)).await?;
+    if announce {
+        println!("Connecting to {}...", address);
+    }
+    let link = Link::open(peripheral, announce).await?;
+
+    // The device accepts a single BLE connection, so the link must be released
+    // however this cycle ends — success, Modbus failure or I/O error.
+    let readings = poll_once(&link).await;
+    link.close().await;
+    let readings = readings?;
+
+    if readings.is_empty() {
+        return Ok(());
+    }
+
+    let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let now = Instant::now();
+    let elapsed = last_reading.map_or(0, |prev| now.duration_since(prev).as_secs() as i64);
+    *last_reading = Some(now);
+
+    let kpis = compute_kpis(&readings, elapsed);
+    print_reading(&readings, &kpis, index, total);
+
+    let row = build_row(&readings, &timestamp, &kpis);
+    if let Some(csv) = session.csv.as_deref_mut() {
+        csv.write(&row)?;
+    }
+    if let Some(archive) = session.archive.as_deref_mut() {
+        match archive.insert(&row) {
+            Ok(()) => println!("  DB INSERT OK: {}", timestamp),
+            Err(e) => eprintln!("  WARNING: DB insert failed: {}", e),
         }
     }
 
@@ -515,7 +546,7 @@ async fn write_device(address: &str, register: u16, value: u16) -> Result<bool> 
         peripheral.ok_or_else(|| anyhow!("Device {} not found after 5 scan attempts", address))?;
 
     println!("Connecting to {}...", address);
-    let link = Link::open(peripheral).await?;
+    let link = Link::open(peripheral, true).await?;
 
     let outcome = write_once(&link, register, value).await;
     link.close().await;

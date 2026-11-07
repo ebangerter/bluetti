@@ -15,6 +15,8 @@ Built with assistance from [GLM 5.1](https://github.com/THUDM/GLM-5.1) AI model.
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Usage](#usage)
+- [Rust Collector](#rust-collector)
+- [DMS Desktop Widget](#dms-desktop-widget)
 - [Modbus Register Map](#modbus-register-map)
 - [KPIs](#kpis)
 - [Dashboard](#dashboard)
@@ -231,6 +233,92 @@ python import_csv.py --csv data.csv
 python graph.py --input data.csv
 # Produces: data_power.png, data_battery.png
 ```
+
+---
+
+## Rust Collector
+
+`rust/` contains `bluetti-reader`, a Rust port of `bluetti_reader.py` with the same register map,
+CSV columns, KPI definitions and CLI flags — and no virtualenv to keep alive. It is the collector
+used in production here.
+
+```bash
+cd rust
+cargo build --release
+cargo test                      # CRC, framing, decoding and KPI maths
+
+./target/release/bluetti-reader --scan
+./target/release/bluetti-reader -a <MAC> --mysql --loop 0 --interval 60
+```
+
+**BLE link handling.** The AC200MAX accepts exactly one BLE connection, and on Linux the ACL link
+belongs to `bluetoothd` rather than to the process that opened it — a reader killed with SIGKILL
+leaves the device stuck at `Connected: yes`, locking out the phone app and every other client.
+The Rust collector therefore:
+
+- connects, reads the three register blocks, and **disconnects around every capture**, so between
+  readings the device's single connection slot is free (~4 s connected per 60 s period);
+- releases the link on error paths as well as the success path;
+- handles SIGINT/SIGTERM so `systemctl stop` disconnects cleanly instead of orphaning the link.
+
+### Running it as a systemd service
+
+`rust/systemd/bluetti-reader.service` is a **user** unit — Bluetooth, the MariaDB container and the
+desktop widget all live in the user session.
+
+```bash
+systemctl --user enable --now ~/DEV/bluetti/rust/systemd/bluetti-reader.service
+systemctl --user status bluetti-reader
+journalctl --user -u bluetti-reader -f
+```
+
+It polls every 60 s into MariaDB. Override the MAC or database settings in
+`~/.config/bluetti/collector.env` rather than editing the unit. `TimeoutStopSec=120` is deliberate:
+a stop must leave the reader room to finish its Modbus cycle and disconnect.
+
+Stop the service before running any other reader — one connection, one client.
+
+See [`rust/README.md`](rust/README.md) for the full details.
+
+---
+
+## DMS Desktop Widget
+
+`dmsplugin/bluettiMonitor/` is a plugin for [DankMaterialShell](https://github.com/AvengeMedia/DankMaterialShell)
+(DMS), the Quickshell-based Wayland desktop shell. It puts the power station in the DankBar:
+battery percentage plus net charge/discharge power, green when charging and red when discharging.
+
+![Bar widget](dmsplugin/bluettiMonitor/bar.png)
+
+Clicking it opens a popout with the full picture — a 24 hour battery chart, the power breakdown,
+AC/DC details and pack state:
+
+<img src="dmsplugin/bluettiMonitor/screenshot.png" alt="Bluetti Monitor popout" width="420" />
+
+*(The chart only covers the stretch where the collector was running; the window is always a full
+24 hours, so gaps in collection show as gaps.)*
+
+The widget queries MariaDB directly with the `mariadb` client every 10 s — it never touches
+Bluetooth, so it cannot compete with the collector for the device's single BLE connection. Net
+power is recomputed in the widget rather than read from the stored column, and readings older than
+the stale threshold are visibly flagged instead of being shown as current.
+
+### Install
+
+```bash
+./dmsplugin/bluettiMonitor/install.sh
+dms ipc plugins enable bluettiMonitor
+```
+
+Then add `bluettiMonitor` to a bar section in DMS Settings, or insert
+`{"id": "bluettiMonitor", "enabled": true}` into one of `barConfigs[0].leftWidgets` /
+`centerWidgets` / `rightWidgets` in `~/.config/dms/settings.json`.
+
+Note that writing `"enabled": true` into `plugin_settings.json` by hand does **not** enable a
+plugin in a running shell — the enable must go through `dms ipc plugins enable`.
+
+See [`dmsplugin/bluettiMonitor/README.md`](dmsplugin/bluettiMonitor/README.md) for the settings
+reference.
 
 ---
 
@@ -571,6 +659,23 @@ bluetti/
 ├── AGENTS.md               # AI agent context file
 ├── .gitignore
 ├── data.csv                # Telemetry CSV (gitignored)
+├── rust/                   # Rust port of the reader (the production collector)
+│   ├── Cargo.toml
+│   ├── rustfmt.toml
+│   ├── src/
+│   │   ├── main.rs         # CLI, BLE transport, polling loop, output
+│   │   ├── protocol.rs     # CRC, framing, register map, KPI maths (unit tested)
+│   │   └── db.rs           # MariaDB schema bootstrap and inserts
+│   └── systemd/
+│       └── bluetti-reader.service   # systemd user unit, 60s polling
+├── dmsplugin/
+│   └── bluettiMonitor/     # DankMaterialShell bar widget
+│       ├── plugin.json     # Plugin manifest
+│       ├── BluettiWidget.qml    # Bar pill + popout with 24h battery chart
+│       ├── BluettiSettings.qml  # Settings page
+│       ├── install.sh      # Symlinks the plugin into ~/.config/dms/plugins
+│       ├── bar.png         # Screenshot: bar pill
+│       └── screenshot.png  # Screenshot: popout
 ├── dashboard/
 │   ├── server.ts           # Bun web server + API endpoints
 │   ├── index.html          # Single-page dashboard (Chart.js)

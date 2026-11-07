@@ -86,10 +86,15 @@ The AC200MAX accepts exactly one BLE connection, and on Linux the ACL link is ow
 `bluetoothd`, not by this process — killing the reader with SIGKILL leaves the device showing
 `Connected: yes` in `bluetoothctl info` indefinitely, blocking the phone app and any other client.
 
-So the link is released on every exit path:
+The link is therefore held only for the duration of a capture. Each cycle is
+scan → connect → read the three register blocks → disconnect, so between captures the device's
+single connection slot is free for the phone app or anything else. At `--interval 60` that is
+roughly 4 s connected and 56 s idle.
+
+It is also released on every exit path:
 
 - normal completion, Modbus failure and I/O error all run through `link.close()`
-  (`unsubscribe` + `disconnect`) in `read_device` / `write_device`;
+  (`unsubscribe` + `disconnect`) in `capture_once` / `write_device`;
 - SIGINT and SIGTERM set a shutdown flag that breaks the polling loop at the next safe point,
   so `systemctl stop` or Ctrl-C disconnects cleanly rather than orphaning the connection.
 
@@ -99,8 +104,9 @@ A `kill -9` still cannot be intercepted. If that happens, clear it by hand:
 
 ## Differences from the Python reader
 
-- One BLE connection is held for the whole session, as in Python; the device still only accepts
-  a single connection, so never run this and `bluetti_reader.py` at the same time.
+- One BLE connection is held only for the duration of each capture (connect, read, disconnect),
+  not for the whole session as in Python; the device still accepts a single connection, so never
+  run this and `bluetti_reader.py` at the same time.
 - Decimal rendering reproduces Python's `Decimal` normalisation (600/10 prints as `60`, not
   `60.0`) so CSV output is byte-comparable.
 - Timestamps are host-local, matching the Python writer — note the MariaDB container runs on UTC.
