@@ -404,8 +404,36 @@ struct Session<'a> {
     loop_count: u64,
     interval: Duration,
     csv: Option<&'a mut CsvSink>,
-    archive: Option<&'a mut Archive>,
+    /// Set when MariaDB logging is on. The slot is refilled by `ensure_archive`
+    /// whenever the connection is missing or dead, so a database that was down
+    /// at startup (or restarts later) does not silence the collector for good.
+    db_config: Option<&'a db::Config>,
+    archive: &'a mut Option<Archive>,
     shutdown: watch::Receiver<bool>,
+}
+
+/// Make `slot` hold a live MariaDB connection, (re)connecting if it is empty or
+/// the existing connection no longer answers a ping. Failures leave the slot
+/// empty; the next call tries again.
+fn ensure_archive(slot: &mut Option<Archive>, config: &db::Config) {
+    if let Some(archive) = slot.as_mut() {
+        if archive.ping() {
+            return;
+        }
+        eprintln!("  WARNING: MariaDB connection lost, reconnecting");
+    }
+    *slot = match Archive::connect(config) {
+        Ok(mut archive) => {
+            if let Err(e) = archive.init_schema() {
+                eprintln!("  WARNING: DB init failed: {}", e);
+            }
+            Some(archive)
+        }
+        Err(e) => {
+            eprintln!("  WARNING: Could not connect to MariaDB: {}", e);
+            None
+        }
+    };
 }
 
 /// Resolve on SIGINT or SIGTERM so the BLE link gets released on shutdown
@@ -518,7 +546,10 @@ async fn capture_once(
     if let Some(csv) = session.csv.as_deref_mut() {
         csv.write(&row)?;
     }
-    if let Some(archive) = session.archive.as_deref_mut() {
+    if let Some(config) = session.db_config {
+        ensure_archive(session.archive, config);
+    }
+    if let Some(archive) = session.archive.as_mut() {
         match archive.insert(&row) {
             Ok(()) => println!("  DB INSERT OK: {}", timestamp),
             Err(e) => eprintln!("  WARNING: DB insert failed: {}", e),
@@ -652,22 +683,10 @@ async fn main() -> Result<()> {
     let use_mysql = cli.mysql || cli.csv.is_some();
     let db_config = db::Config::from_env();
 
-    let mut archive = if use_mysql {
-        match Archive::connect(&db_config) {
-            Ok(mut archive) => {
-                if let Err(e) = archive.init_schema() {
-                    eprintln!("  WARNING: DB init failed: {}", e);
-                }
-                Some(archive)
-            }
-            Err(e) => {
-                eprintln!("  WARNING: Could not connect to MariaDB: {}", e);
-                None
-            }
-        }
-    } else {
-        None
-    };
+    let mut archive: Option<Archive> = None;
+    if use_mysql {
+        ensure_archive(&mut archive, &db_config);
+    }
 
     let mut csv = match &cli.csv {
         Some(path) => Some(CsvSink::open(path)?),
@@ -678,7 +697,7 @@ async fn main() -> Result<()> {
     if let Some(path) = &cli.csv {
         targets.push(path.clone());
     }
-    if archive.is_some() {
+    if use_mysql {
         targets.push("MariaDB".to_string());
     }
     if !targets.is_empty() {
@@ -698,7 +717,8 @@ async fn main() -> Result<()> {
             loop_count,
             interval: Duration::from_secs(interval_secs),
             csv: csv.as_mut(),
-            archive: archive.as_mut(),
+            db_config: use_mysql.then_some(&db_config),
+            archive: &mut archive,
             shutdown: shutdown.clone(),
         };
 
@@ -711,22 +731,6 @@ async fn main() -> Result<()> {
                 eprintln!("\nBLE connection lost: {}", e);
                 eprintln!("Reconnecting in 10 seconds...");
                 tokio::time::sleep(Duration::from_secs(10)).await;
-
-                if use_mysql {
-                    let healthy = archive.as_mut().map(|a| a.ping()).unwrap_or(false);
-                    if !healthy {
-                        archive = match Archive::connect(&db_config) {
-                            Ok(mut reconnected) => {
-                                let _ = reconnected.init_schema();
-                                Some(reconnected)
-                            }
-                            Err(e) => {
-                                eprintln!("  WARNING: Could not connect to MariaDB: {}", e);
-                                None
-                            }
-                        };
-                    }
-                }
             }
         }
     }
