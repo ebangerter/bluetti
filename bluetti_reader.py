@@ -92,8 +92,8 @@ def compute_power_rate(net_power):
 POWER_RATE_LABELS = {0: "Trickle", 1: "Normal", 2: "Fast"}
 
 
-def compute_net_power(dc_input_power, dc_output_power):
-    return dc_input_power - dc_output_power
+def compute_net_power(dc_input_power, ac_input_power, ac_output_power, dc_output_power):
+    return (dc_input_power + ac_input_power) - (ac_output_power + dc_output_power)
 
 
 class Field:
@@ -483,10 +483,11 @@ async def read_device(address, loop_count=1, interval=5, csv_writer=None, csv_fi
 
                 dc_input = all_results.get("dc_input_power", (0, ""))[0] or 0
                 ac_input = all_results.get("ac_input_power", (0, ""))[0] or 0
+                ac_output = all_results.get("ac_output_power", (0, ""))[0] or 0
                 dc_output = all_results.get("dc_output_power", (0, ""))[0] or 0
                 battery_pct = all_results.get("total_battery_percent", (None, ""))[0]
 
-                net_power = compute_net_power(dc_input, dc_output)
+                net_power = compute_net_power(dc_input, ac_input, ac_output, dc_output)
                 charging_state = compute_charging_state(dc_input, ac_input)
                 battery_range = compute_battery_range(battery_pct)
                 power_rate = compute_power_rate(net_power if charging_state > 0 else 0)
@@ -498,7 +499,7 @@ async def read_device(address, loop_count=1, interval=5, csv_writer=None, csv_fi
                 if charging_state == 0:
                     print(f"  Charging:        Not charging")
                 else:
-                    print(f"  Charging:        {state_label} ({dc_input}W in, {dc_output}W out) -> Net: {net_sign}{net_power}W [{rate_label}]")
+                    print(f"  Charging:        {state_label} ({dc_input + ac_input}W in, {ac_output + dc_output}W out) -> Net: {net_sign}{net_power}W [{rate_label}]")
                 range_label = BATTERY_RANGE_LABELS.get(battery_range, "?") if battery_range is not None else "?"
                 print(f"  Battery Range:   {range_label}")
 

@@ -665,7 +665,7 @@ The `readings` table stores one row per polling interval:
 | `elapsed_seconds` | INT | Seconds since last reading |
 | `charging_state` | TINYINT(1) | 0=None, 1=DC, 2=AC, 3=AC+DC |
 | `battery_range` | TINYINT(1) | 0=0-25%, 1=25-50%, 2=50-75%, 3=75-100% |
-| `net_power` | INT | DC input - DC output |
+| `net_power` | INT | (DC input + AC input) - (AC output + DC output) |
 | `power_rate` | TINYINT(1) | 0=Trickle, 1=Normal, 2=Fast |
 
 Indexed on `timestamp` for fast date-range queries.

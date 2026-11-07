@@ -10,6 +10,10 @@ The widget queries the local MariaDB archive directly with the `mariadb` client,
 row of the `readings` table and returning it as a single JSON document. No dashboard server is
 involved. The query runs every 10 seconds (configurable, 5–120 s).
 
+Net power is computed by the widget as `(solar in + AC in) - (AC out + DC out)`. It deliberately
+ignores the stored `net_power` column, which `bluetti_reader.py` fills with `dc_in - dc_out` and so
+does not account for the AC side.
+
 That means **`bluetti_reader.py` must be running** for the values to stay fresh:
 
     cd /home/ebangert/DEV/bluetti

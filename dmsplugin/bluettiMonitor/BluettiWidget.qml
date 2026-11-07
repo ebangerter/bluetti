@@ -29,7 +29,12 @@ PluginComponent {
     readonly property bool ok: hasData && !stale
 
     readonly property int battery: hasData ? Math.round(reading.battery || 0) : 0
-    readonly property int netPower: hasData ? Math.round(reading.netPower || 0) : 0
+    // Net flow is everything coming in minus everything going out; the net_power
+    // column only accounts for the DC side, so it is recomputed here.
+    readonly property int netPower: hasData
+        ? Math.round((Number(reading.dcIn) || 0) + (Number(reading.acIn) || 0)
+                     - (Number(reading.acOut) || 0) - (Number(reading.dcOut) || 0))
+        : 0
     readonly property int chargingState: hasData ? (reading.chargingState || 0) : 0
     readonly property bool charging: ok && chargingState > 0
 
@@ -414,7 +419,7 @@ PluginComponent {
                             { label: "AC in", value: root.watts(root.reading.acIn), icon: "power" },
                             { label: "AC out", value: root.watts(root.reading.acOut), icon: "bolt" },
                             { label: "DC out", value: root.watts(root.reading.dcOut), icon: "usb" },
-                            { label: "Net", value: root.signedWatts(root.reading.netPower), icon: "trending_up", valueColor: root.netColor() },
+                            { label: "Net", value: root.signedWatts(root.netPower), icon: "trending_up", valueColor: root.netColor() },
                             { label: "Generated", value: root.num(root.reading.generation, 1) + " kWh", icon: "insights" }
                         ] : []
 
