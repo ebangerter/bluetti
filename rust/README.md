@@ -56,6 +56,30 @@ reach the CSV.
 
     cargo test        10 unit tests covering CRC, framing, decoding and KPI classification
 
+## Running it as a service
+
+`systemd/bluetti-reader.service` is a **user** unit — BLE, the MariaDB container and the DMS
+widget all live in your user session, and lingering is already enabled so it survives logout.
+
+    systemctl --user enable --now ~/DEV/bluetti/rust/systemd/bluetti-reader.service
+    systemctl --user status bluetti-reader
+    journalctl --user -u bluetti-reader -f
+
+It polls every 60 s into MariaDB (`--mysql --loop 0 --interval 60`). CSV is deliberately off:
+`data.csv` still carries the old 19-column header and appending 24-column rows would corrupt it.
+
+Settings come from `Environment=` lines in the unit; override any of them without editing the
+unit by writing `~/.config/bluetti/collector.env`:
+
+    BLUETTI_MAC=CF:DD:53:11:F4:72
+    BLUETTI_DB_PORT=3390
+
+`Restart=always` with `RestartSec=15` covers Bluetooth or the database not being up yet.
+`TimeoutStopSec=120` is deliberate: a stop must leave the reader room to finish its current
+Modbus cycle and disconnect, because a SIGKILL would strand the link (see below).
+
+Do not run this service and `bluetti_reader.py` at the same time — one connection, one client.
+
 ## Releasing the BLE link
 
 The AC200MAX accepts exactly one BLE connection, and on Linux the ACL link is owned by

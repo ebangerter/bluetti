@@ -1,0 +1,41 @@
+[Unit]
+Description=Bluetti AC200MAX collector (BLE -> MariaDB)
+Documentation=file:///home/ebangert/DEV/bluetti/rust/README.md
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ebangert/DEV/bluetti
+
+# Override any of these in ~/.config/bluetti/collector.env
+Environment=BLUETTI_MAC=CF:DD:53:11:F4:72
+Environment=BLUETTI_DB_HOST=127.0.0.1
+Environment=BLUETTI_DB_PORT=3390
+Environment=BLUETTI_DB_NAME=Bluetti_AC200MAX
+Environment=BLUETTI_DB_USER=root
+Environment=BLUETTI_DB_PASSWORD=kilroy
+EnvironmentFile=-%h/.config/bluetti/collector.env
+
+ExecStart=/home/ebangert/DEV/bluetti/rust/target/release/bluetti-reader \
+    --address ${BLUETTI_MAC} \
+    --mysql \
+    --loop 0 \
+    --interval 60
+
+# Bluetooth and the MariaDB container are system-level and may not be ready
+# when the user manager starts this; the reader reports and exits, and the
+# restart loop picks it up.
+Restart=always
+RestartSec=15
+
+# SIGTERM makes the reader finish its current Modbus cycle and disconnect.
+# The BLE link belongs to bluetoothd, so a SIGKILL would strand it and lock
+# out every other client — give the clean path room to run.
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=120
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

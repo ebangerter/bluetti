@@ -28,6 +28,16 @@ python bluetti_reader.py -a <MAC> --loop 0 --interval 10
 definitions and CLI flags. Build with `cargo build --release` (binary at
 `rust/target/release/bluetti-reader`), test with `cargo test`. See `rust/README.md`.
 
+The live collector is the systemd **user** unit `bluetti-reader.service`
+(`rust/systemd/bluetti-reader.service`), polling into MariaDB every 60 s:
+
+```bash
+systemctl --user status bluetti-reader
+journalctl --user -u bluetti-reader -f
+```
+
+Stop it before running any other reader — the device accepts one BLE connection.
+
 ## Notes
 
 - Requires a Bluetooth adapter with BLE support on the host machine.
