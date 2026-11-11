@@ -35,6 +35,13 @@ When the newest row is older than the stale threshold (default 180 s) the widget
 from the bar, switches to a neutral battery icon and says "Stale data — collector stopped?" in the
 popout, so a dead collector is visible instead of silently showing an old number.
 
+While charging, a strip below the 24 h chart estimates when the battery will be full:
+`remaining energy / (net input power × 0.8)`. It assumes a 2048 Wh pack (AC200MAX) and ~20 %
+charging losses, and shows both the duration and the projected wall-clock time, anchored on the
+reading's timestamp. Capacity and efficiency are tunable through the hidden plugin settings
+`batteryCapacityWh` and `chargeEfficiency`. The strip disappears when not charging or already
+at 100 %.
+
 ## Layout
 
     dmsplugin/

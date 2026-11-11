@@ -40,6 +40,20 @@ PluginComponent {
     readonly property int chargingState: hasData ? (reading.chargingState || 0) : 0
     readonly property bool charging: ok && chargingState > 0
 
+    // ── Time-to-full estimate ───────────────────────────────────────────────
+    // The AC200MAX has a 2048 Wh battery; charging losses are roughly 20 %
+    // (AC/solar in is measured upstream of the cells), so the energy actually
+    // landing in the pack is ~80 % of the net input power.
+    readonly property double batteryCapacityWh: pluginData.batteryCapacityWh !== undefined ? pluginData.batteryCapacityWh : 2048
+    readonly property double chargeEfficiency: pluginData.chargeEfficiency !== undefined ? pluginData.chargeEfficiency : 0.8
+
+    readonly property double hoursToFull: {
+        if (!charging || netPower <= 0 || battery >= 100)
+            return NaN
+        const energyNeeded = (100 - battery) / 100 * batteryCapacityWh
+        return energyNeeded / (netPower * chargeEfficiency)
+    }
+
     popoutWidth: 420
 
     // ── Data access ───────────────────────────────────────────────────────────
@@ -225,6 +239,30 @@ PluginComponent {
         default:
             return "Not charging"
         }
+    }
+
+    // "2 h 15 m" style duration; under a minute shows "< 1 m".
+    function durationLabel(hours) {
+        if (isNaN(hours))
+            return ""
+        if (hours < 1 / 60)
+            return "< 1 m"
+        const totalMinutes = Math.round(hours * 60)
+        if (totalMinutes < 60)
+            return totalMinutes + " m"
+        const h = Math.floor(totalMinutes / 60)
+        const m = totalMinutes % 60
+        return m > 0 ? h + " h " + m + " m" : h + " h"
+    }
+
+    // Wall-clock time when the battery should reach 100 %, e.g. "13:07".
+    // Anchored on the reading's timestamp, not now, so a stale row does not
+    // shift the estimate.
+    function etaClockLabel() {
+        if (isNaN(hoursToFull))
+            return "—"
+        const baseMs = Date.now() - ageSecs * 1000
+        return new Date(baseMs + hoursToFull * 3600 * 1000).toLocaleTimeString(Qt.locale(), "HH:mm")
     }
 
     function batteryIcon() {
@@ -591,6 +629,36 @@ PluginComponent {
                         ctx.textAlign = "right"
                         ctx.fillText("now", right, bottom + 3)
                     }
+                }
+            }
+
+            // ── Time-to-full estimate ────────────────────────────────────
+            StyledRect {
+                width: parent.width
+                height: 34
+                radius: Theme.cornerRadius * 1.5
+                color: Qt.rgba(Theme.surfaceContainer.r, Theme.surfaceContainer.g, Theme.surfaceContainer.b, 0.5)
+                border.width: 1
+                border.color: Qt.rgba(Theme.secondary.r, Theme.secondary.g, Theme.secondary.b, 0.15)
+                visible: !isNaN(root.hoursToFull)
+
+                DankIcon {
+                    name: "schedule"
+                    size: 16
+                    color: Theme.secondary
+                    anchors.left: parent.left
+                    anchors.leftMargin: Theme.spacingM
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+
+                StyledText {
+                    text: "Full in " + root.durationLabel(root.hoursToFull)
+                        + "  ·  at " + root.etaClockLabel()
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.surfaceText
+                    anchors.left: parent.left
+                    anchors.leftMargin: Theme.spacingM + 16 + Theme.spacingS
+                    anchors.verticalCenter: parent.verticalCenter
                 }
             }
 
