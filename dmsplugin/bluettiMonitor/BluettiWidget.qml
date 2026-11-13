@@ -1007,7 +1007,7 @@ PluginComponent {
 
                     StyledText {
                         text: "battery %"
-                        font.pixelSize: Theme.fontSizeSmall
+                        font.pixelSize: Theme.fontSizeMedium
                         color: Theme.surfaceVariantText
                         anchors.verticalCenter: parent.verticalCenter
                     }
@@ -1022,7 +1022,7 @@ PluginComponent {
 
                     StyledText {
                         text: "solar W"
-                        font.pixelSize: Theme.fontSizeSmall
+                        font.pixelSize: Theme.fontSizeMedium
                         color: Theme.surfaceVariantText
                         anchors.verticalCenter: parent.verticalCenter
                     }
@@ -1037,8 +1037,19 @@ PluginComponent {
                         anchors.centerIn: parent
                         visible: !root.history || root.history.length < 2
                         text: "Not enough history yet"
-                        font.pixelSize: Theme.fontSizeMedium
+                        font.pixelSize: Theme.fontSizeXLarge
                         color: Theme.surfaceVariantText
+                    }
+
+                    // Big green battery % in the middle of the graph.
+                    StyledText {
+                        anchors.centerIn: parent
+                        visible: root.history && root.history.length >= 2
+                        text: root.hasData ? root.battery + "%" : ""
+                        font.pixelSize: Math.round(Theme.fontSizeXLarge * 2)
+                        font.weight: Font.Bold
+                        color: Theme.success
+                        opacity: 0.85
                     }
 
                     Canvas {
@@ -1069,7 +1080,7 @@ PluginComponent {
                             rightGutter: 48,
                             top: 12,
                             bottom: 18,
-                            labelFont: "11px sans-serif",
+                            labelFont: "13px sans-serif",
                             maxBarW: 10,
                             lineW: 2.5,
                             markerR: 4
@@ -1080,7 +1091,7 @@ PluginComponent {
                 // Time-to-full estimate
                 StyledRect {
                     Layout.fillWidth: true
-                    height: 34
+                    height: 40
                     radius: Theme.cornerRadius * 1.5
                     color: Qt.rgba(Theme.surfaceContainer.r, Theme.surfaceContainer.g, Theme.surfaceContainer.b, 0.5)
                     border.width: 1
@@ -1089,7 +1100,7 @@ PluginComponent {
 
                     DankIcon {
                         name: "schedule"
-                        size: 16
+                        size: 18
                         color: Theme.secondary
                         anchors.left: parent.left
                         anchors.leftMargin: Theme.spacingM
@@ -1099,10 +1110,10 @@ PluginComponent {
                     StyledText {
                         text: "Full in " + root.durationLabel(root.hoursToFull)
                             + "  ·  at " + root.etaClockLabel()
-                        font.pixelSize: Theme.fontSizeSmall
+                        font.pixelSize: Theme.fontSizeMedium
                         color: Theme.surfaceText
                         anchors.left: parent.left
-                        anchors.leftMargin: Theme.spacingM + 16 + Theme.spacingS
+                        anchors.leftMargin: Theme.spacingM + 18 + Theme.spacingS
                         anchors.verticalCenter: parent.verticalCenter
                     }
                 }
@@ -1140,21 +1151,21 @@ PluginComponent {
 
                                 DankIcon {
                                     name: modelData.icon
-                                    size: 16
+                                    size: 18
                                     color: Theme.primary
                                     anchors.verticalCenter: parent.verticalCenter
                                 }
 
                                 StyledText {
                                     text: modelData.label
-                                    font.pixelSize: Theme.fontSizeSmall
+                                    font.pixelSize: Theme.fontSizeMedium
                                     color: Theme.surfaceVariantText
                                     anchors.verticalCenter: parent.verticalCenter
                                 }
 
                                 StyledText {
                                     text: modelData.value
-                                    font.pixelSize: Theme.fontSizeSmall
+                                    font.pixelSize: Theme.fontSizeMedium
                                     font.weight: Font.Bold
                                     color: modelData.valueColor !== undefined ? modelData.valueColor : Theme.surfaceText
                                     anchors.verticalCenter: parent.verticalCenter
@@ -1165,7 +1176,7 @@ PluginComponent {
                         StyledText {
                             visible: !root.hasData
                             text: root.loading ? "Querying the database…" : "No reading available"
-                            font.pixelSize: Theme.fontSizeSmall
+                            font.pixelSize: Theme.fontSizeMedium
                             color: Theme.surfaceVariantText
                         }
                     }
@@ -1199,13 +1210,13 @@ PluginComponent {
 
                             delegate: Item {
                                 width: (zoomDetailGrid.width - Theme.spacingXL) / 2
-                                height: 22
+                                height: 26
 
                                 StyledText {
                                     anchors.left: parent.left
                                     anchors.verticalCenter: parent.verticalCenter
                                     text: modelData.label
-                                    font.pixelSize: Theme.fontSizeSmall
+                                    font.pixelSize: Theme.fontSizeMedium
                                     color: Theme.surfaceVariantText
                                 }
 
@@ -1213,7 +1224,7 @@ PluginComponent {
                                     anchors.right: parent.right
                                     anchors.verticalCenter: parent.verticalCenter
                                     text: modelData.value
-                                    font.pixelSize: Theme.fontSizeSmall
+                                    font.pixelSize: Theme.fontSizeMedium
                                     color: Theme.surfaceText
                                 }
                             }
@@ -1224,13 +1235,13 @@ PluginComponent {
                 // Footer
                 Item {
                     Layout.fillWidth: true
-                    height: 20
+                    height: 24
 
                     StyledText {
                         anchors.left: parent.left
                         anchors.verticalCenter: parent.verticalCenter
                         text: root.hasData ? "Updated " + root.ageLabel() : "—"
-                        font.pixelSize: Theme.fontSizeSmall
+                        font.pixelSize: Theme.fontSizeMedium
                         color: root.stale ? Theme.error : Theme.surfaceVariantText
                     }
 
@@ -1238,7 +1249,7 @@ PluginComponent {
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
                         text: "every " + root.refreshSecs + "s"
-                        font.pixelSize: Theme.fontSizeSmall
+                        font.pixelSize: Theme.fontSizeMedium
                         color: Theme.surfaceVariantText
                     }
                 }
