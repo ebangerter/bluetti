@@ -1,5 +1,7 @@
 import QtQuick
 import Quickshell
+import Quickshell.Wayland
+import Quickshell.Io
 import qs.Common
 import qs.Services
 import qs.Widgets
@@ -23,8 +25,10 @@ PluginComponent {
     property bool loading: true
     property string errorText: ""
     property double ageSecs: 0
-    /// [unixSeconds, batteryPercent] pairs for the last 24 hours.
+    /// [unixSeconds, batteryPercent, solarWatts] pairs for the last 24 hours.
     property var history: []
+    /// Whether the large 60 % screen zoom of the 24 h chart is open.
+    property bool chartZoomed: false
 
     readonly property bool hasData: reading !== null
     readonly property bool stale: hasData && ageSecs > staleSecs
@@ -198,6 +202,130 @@ PluginComponent {
         running: true
         repeat: true
         onTriggered: root.refreshAge()
+    }
+
+    // ── Chart rendering ──────────────────────────────────────────────────────
+    // Draws the 24 h battery + solar chart into a canvas context. Shared by the
+    // small popout chart and the large zoomed modal so both stay identical.
+    // `geometry` supplies width, height, gutters, paddings and sizing hints.
+    function drawChart(ctx, points, geometry) {
+        ctx.reset()
+        if (!points || points.length < 2)
+            return
+
+        const left = geometry.gutter
+        const right = geometry.width - geometry.rightGutter
+        const top = geometry.top
+        const bottom = geometry.height - geometry.bottom
+        const plotWidth = right - left
+        const plotHeight = bottom - top
+        if (plotWidth <= 0 || plotHeight <= 0)
+            return
+
+        // Fixed 24 h window ending at the newest sample, so gaps
+        // in collection show as gaps rather than being stretched.
+        const tEnd = points[points.length - 1][0]
+        const tStart = tEnd - 24 * 3600
+        const span = Math.max(1, tEnd - tStart)
+
+        const xAt = t => left + ((t - tStart) / span) * plotWidth
+        const yAt = pct => bottom - (Math.max(0, Math.min(100, pct)) / 100) * plotHeight
+
+        // Solar scale: bars on the second (right) axis, scaled to a round
+        // maximum derived from the peak of the data.
+        let solarMax = 0
+        for (const point of points)
+            solarMax = Math.max(solarMax, Number(point[2]) || 0)
+        const solarScale = solarMax > 0
+            ? Math.ceil(solarMax / 100) * 100
+            : 100
+        const ySolarAt = w => bottom - (Math.max(0, w) / solarScale) * plotHeight
+
+        // Horizontal guides at 0 / 25 / 50 / 75 / 100 %.
+        ctx.lineWidth = 1
+        ctx.font = geometry.labelFont
+        ctx.textAlign = "right"
+        ctx.textBaseline = "middle"
+        for (const pct of [0, 25, 50, 75, 100]) {
+            const y = yAt(pct)
+            ctx.strokeStyle = Qt.rgba(Theme.surfaceVariantText.r, Theme.surfaceVariantText.g,
+                                      Theme.surfaceVariantText.b, pct === 0 || pct === 100 ? 0.25 : 0.12)
+            ctx.beginPath()
+            ctx.moveTo(left, y)
+            ctx.lineTo(right, y)
+            ctx.stroke()
+
+            if (pct % 50 === 0) {
+                ctx.fillStyle = Qt.rgba(Theme.surfaceVariantText.r, Theme.surfaceVariantText.g,
+                                        Theme.surfaceVariantText.b, 0.8)
+                ctx.fillText(pct + "%", left - 4, y)
+            }
+        }
+
+        // Solar bars on the second (right) scale, drawn behind the battery
+        // curve. One bar per 10 minute bucket.
+        const barW = Math.max(2, Math.min(geometry.maxBarW, plotWidth / points.length - 1))
+        for (let i = 0; i < points.length; i++) {
+            const solar = Number(points[i][2]) || 0
+            if (solar <= 0)
+                continue
+            const bx = xAt(points[i][0])
+            const by = ySolarAt(solar)
+            ctx.fillStyle = Qt.rgba(Theme.success.r, Theme.success.g, Theme.success.b, 0.55)
+            ctx.fillRect(bx - barW / 2, by, barW, bottom - by)
+        }
+
+        // Solar axis labels in the right gutter (second scale).
+        ctx.textAlign = "left"
+        ctx.textBaseline = "middle"
+        const solarStep = solarScale >= 400 ? 200 : 100
+        for (let w = solarStep; w <= solarScale; w += solarStep) {
+            const y = ySolarAt(w)
+            ctx.fillStyle = Qt.rgba(Theme.success.r, Theme.success.g, Theme.success.b, 0.9)
+            ctx.fillText(w + "W", right + 3, y)
+        }
+
+        // Filled area under the curve.
+        const gradient = ctx.createLinearGradient(0, top, 0, bottom)
+        gradient.addColorStop(0, Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.35))
+        gradient.addColorStop(1, Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.02))
+
+        ctx.beginPath()
+        ctx.moveTo(xAt(points[0][0]), bottom)
+        for (const point of points)
+            ctx.lineTo(xAt(point[0]), yAt(point[1]))
+        ctx.lineTo(xAt(points[points.length - 1][0]), bottom)
+        ctx.closePath()
+        ctx.fillStyle = gradient
+        ctx.fill()
+
+        // The curve itself.
+        ctx.beginPath()
+        ctx.moveTo(xAt(points[0][0]), yAt(points[0][1]))
+        for (const point of points)
+            ctx.lineTo(xAt(point[0]), yAt(point[1]))
+        ctx.strokeStyle = Theme.primary
+        ctx.lineWidth = geometry.lineW
+        ctx.lineJoin = "round"
+        ctx.stroke()
+
+        // Marker on the newest sample.
+        const lastX = xAt(points[points.length - 1][0])
+        const lastY = yAt(points[points.length - 1][1])
+        ctx.beginPath()
+        ctx.arc(lastX, lastY, geometry.markerR, 0, 2 * Math.PI)
+        ctx.fillStyle = Theme.primary
+        ctx.fill()
+
+        // Time axis ends and midpoint.
+        ctx.fillStyle = Qt.rgba(Theme.surfaceVariantText.r, Theme.surfaceVariantText.g,
+                                Theme.surfaceVariantText.b, 0.8)
+        ctx.textBaseline = "top"
+        ctx.textAlign = "left"
+        ctx.fillText("-24 h", left, bottom + 3)
+        ctx.fillText("-12 h", (left + right) / 2, bottom + 3)
+        ctx.textAlign = "right"
+        ctx.fillText("now", right, bottom + 3)
     }
 
     // ── Formatting ────────────────────────────────────────────────────────────
@@ -584,128 +712,25 @@ PluginComponent {
                         }
                     }
 
-                    onPaint: {
-                        const ctx = getContext("2d")
-                        ctx.reset()
+                    onPaint: root.drawChart(getContext("2d"), root.history, {
+                        width: width,
+                        height: height,
+                        gutter: gutter,
+                        rightGutter: rightGutter,
+                        top: 10,
+                        bottom: 14,
+                        labelFont: "9px sans-serif",
+                        maxBarW: 6,
+                        lineW: 2,
+                        markerR: 3
+                    })
+                }
 
-                        const points = root.history
-                        if (!points || points.length < 2)
-                            return
-
-                        const left = gutter
-                        const right = width - rightGutter
-                        const top = 10
-                        const bottom = height - 14
-                        const plotWidth = right - left
-                        const plotHeight = bottom - top
-                        if (plotWidth <= 0 || plotHeight <= 0)
-                            return
-
-                        // Fixed 24 h window ending at the newest sample, so gaps
-                        // in collection show as gaps rather than being stretched.
-                        const tEnd = points[points.length - 1][0]
-                        const tStart = tEnd - 24 * 3600
-                        const span = Math.max(1, tEnd - tStart)
-
-                        const xAt = t => left + ((t - tStart) / span) * plotWidth
-                        const yAt = pct => bottom - (Math.max(0, Math.min(100, pct)) / 100) * plotHeight
-
-                        // Solar scale: bars on the second (right) axis, scaled to
-                        // a round maximum derived from the peak of the data.
-                        let solarMax = 0
-                        for (const point of points)
-                            solarMax = Math.max(solarMax, Number(point[2]) || 0)
-                        const solarScale = solarMax > 0
-                            ? Math.ceil(solarMax / 100) * 100
-                            : 100
-                        const ySolarAt = w => bottom - (Math.max(0, w) / solarScale) * plotHeight
-
-                        // Horizontal guides at 0 / 25 / 50 / 75 / 100 %.
-                        ctx.lineWidth = 1
-                        ctx.font = "9px sans-serif"
-                        ctx.textAlign = "right"
-                        ctx.textBaseline = "middle"
-                        for (const pct of [0, 25, 50, 75, 100]) {
-                            const y = yAt(pct)
-                            ctx.strokeStyle = Qt.rgba(Theme.surfaceVariantText.r, Theme.surfaceVariantText.g,
-                                                      Theme.surfaceVariantText.b, pct === 0 || pct === 100 ? 0.25 : 0.12)
-                            ctx.beginPath()
-                            ctx.moveTo(left, y)
-                            ctx.lineTo(right, y)
-                            ctx.stroke()
-
-                            if (pct % 50 === 0) {
-                                ctx.fillStyle = Qt.rgba(Theme.surfaceVariantText.r, Theme.surfaceVariantText.g,
-                                                        Theme.surfaceVariantText.b, 0.8)
-                                ctx.fillText(pct + "%", left - 4, y)
-                            }
-                        }
-
-                        // Solar bars on the second (right) scale, drawn behind the
-                        // battery curve. One bar per 10 minute bucket.
-                        const barW = Math.max(2, Math.min(6, plotWidth / points.length - 1))
-                        for (let i = 0; i < points.length; i++) {
-                            const solar = Number(points[i][2]) || 0
-                            if (solar <= 0)
-                                continue
-                            const bx = xAt(points[i][0])
-                            const by = ySolarAt(solar)
-                            ctx.fillStyle = Qt.rgba(Theme.success.r, Theme.success.g, Theme.success.b, 0.55)
-                            ctx.fillRect(bx - barW / 2, by, barW, bottom - by)
-                        }
-
-                        // Solar axis labels in the right gutter (second scale).
-                        ctx.textAlign = "left"
-                        ctx.textBaseline = "middle"
-                        const solarStep = solarScale >= 400 ? 200 : 100
-                        for (let w = solarStep; w <= solarScale; w += solarStep) {
-                            const y = ySolarAt(w)
-                            ctx.fillStyle = Qt.rgba(Theme.success.r, Theme.success.g, Theme.success.b, 0.9)
-                            ctx.fillText(w + "W", right + 3, y)
-                        }
-
-                        // Filled area under the curve.
-                        const gradient = ctx.createLinearGradient(0, top, 0, bottom)
-                        gradient.addColorStop(0, Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.35))
-                        gradient.addColorStop(1, Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.02))
-
-                        ctx.beginPath()
-                        ctx.moveTo(xAt(points[0][0]), bottom)
-                        for (const point of points)
-                            ctx.lineTo(xAt(point[0]), yAt(point[1]))
-                        ctx.lineTo(xAt(points[points.length - 1][0]), bottom)
-                        ctx.closePath()
-                        ctx.fillStyle = gradient
-                        ctx.fill()
-
-                        // The curve itself.
-                        ctx.beginPath()
-                        ctx.moveTo(xAt(points[0][0]), yAt(points[0][1]))
-                        for (const point of points)
-                            ctx.lineTo(xAt(point[0]), yAt(point[1]))
-                        ctx.strokeStyle = Theme.primary
-                        ctx.lineWidth = 2
-                        ctx.lineJoin = "round"
-                        ctx.stroke()
-
-                        // Marker on the newest sample.
-                        const lastX = xAt(points[points.length - 1][0])
-                        const lastY = yAt(points[points.length - 1][1])
-                        ctx.beginPath()
-                        ctx.arc(lastX, lastY, 3, 0, 2 * Math.PI)
-                        ctx.fillStyle = Theme.primary
-                        ctx.fill()
-
-                        // Time axis ends.
-                        ctx.fillStyle = Qt.rgba(Theme.surfaceVariantText.r, Theme.surfaceVariantText.g,
-                                                Theme.surfaceVariantText.b, 0.8)
-                        ctx.textBaseline = "top"
-                        ctx.textAlign = "left"
-                        ctx.fillText("-24 h", left, bottom + 3)
-                        ctx.fillText("-12 h", (left + right) / 2, bottom + 3)
-                        ctx.textAlign = "right"
-                        ctx.fillText("now", right, bottom + 3)
-                    }
+                // Click the chart to open a large zoomed view.
+                MouseArea {
+                    anchors.fill: chart
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.chartZoomed = true
                 }
             }
 
@@ -872,6 +897,189 @@ PluginComponent {
                     color: Theme.surfaceVariantText
                 }
             }
+        }
+    }
+
+    // ── Large chart zoom (60 % of the screen) ──────────────────────────────
+    // A click on the popout chart opens the same chart at 60 % of the screen
+    // on the overlay layer. Click anywhere (or press Esc) to close.
+    PanelWindow {
+        id: zoomModal
+        visible: root.chartZoomed
+        WlrLayershell.layer: WlrLayer.Overlay
+        WlrLayershell.namespace: "bluettiMonitor.chartZoom"
+        anchors { top: true; left: true; right: true; bottom: true }
+        color: "transparent"
+
+        // Dim background; click dismisses.
+        Rectangle {
+            anchors.fill: parent
+            color: Qt.rgba(0, 0, 0, 0.45)
+
+            MouseArea {
+                anchors.fill: parent
+                onClicked: root.chartZoomed = false
+            }
+        }
+
+        Rectangle {
+            id: zoomCard
+            readonly property real cardW: (zoomModal.width ?? 1920) * 0.6
+            readonly property real cardH: (zoomModal.height ?? 1080) * 0.6
+            anchors.centerIn: parent
+            width: cardW
+            height: cardH
+            radius: Theme.cornerRadius * 2
+            color: Theme.surfaceContainerHigh
+            border.width: 1
+            border.color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.25)
+
+            // Header
+            Row {
+                id: zoomHeader
+                anchors.top: parent.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.margins: Theme.spacingM
+                spacing: Theme.spacingS
+
+                DankIcon {
+                    name: "show_chart"
+                    size: 18
+                    color: Theme.primary
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+
+                StyledText {
+                    text: "Battery & Solar · last 24 h"
+                    font.pixelSize: Theme.fontSizeMedium
+                    font.weight: Font.Bold
+                    color: Theme.surfaceText
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+
+                // Live summary, centered in the leftover space.
+                StyledText {
+                    width: zoomHeader.width - 260
+                    horizontalAlignment: Text.AlignHCenter
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: root.hasData ? root.battery + "%  ·  solar " + root.watts(root.reading.dcIn) : ""
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.surfaceVariantText
+                    elide: Text.ElideRight
+                }
+
+                Item { width: 1; height: 1 }
+
+                DankIcon {
+                    name: "close"
+                    size: 18
+                    color: Theme.surfaceVariantText
+                    anchors.verticalCenter: parent.verticalCenter
+
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.chartZoomed = false
+                    }
+                }
+            }
+
+            // Legend: battery line + solar bars.
+            Row {
+                anchors.top: zoomHeader.bottom
+                anchors.topMargin: Theme.spacingXS
+                anchors.right: parent.right
+                anchors.rightMargin: Theme.spacingM
+                spacing: Theme.spacingS
+
+                Rectangle {
+                    width: 14
+                    height: 3
+                    radius: 1.5
+                    color: Theme.primary
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+
+                StyledText {
+                    text: "battery %"
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.surfaceVariantText
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Rectangle {
+                    width: 10
+                    height: 10
+                    radius: 2
+                    color: Qt.rgba(Theme.success.r, Theme.success.g, Theme.success.b, 0.7)
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+
+                StyledText {
+                    text: "solar W"
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.surfaceVariantText
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+
+            StyledText {
+                anchors.centerIn: parent
+                visible: !root.history || root.history.length < 2
+                text: "Not enough history yet"
+                font.pixelSize: Theme.fontSizeMedium
+                color: Theme.surfaceVariantText
+            }
+
+            Canvas {
+                id: zoomChart
+                anchors.top: zoomHeader.bottom
+                anchors.topMargin: Theme.spacingS
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: Theme.spacingM
+                anchors.leftMargin: Theme.spacingM
+                anchors.rightMargin: Theme.spacingM
+                visible: root.history && root.history.length >= 2
+                antialiasing: true
+                renderStrategy: Canvas.Cooperative
+
+                Connections {
+                    target: root
+                    function onHistoryChanged() {
+                        zoomChart.requestPaint()
+                    }
+                    function onChartZoomedChanged() {
+                        if (root.chartZoomed)
+                            zoomChart.requestPaint()
+                    }
+                }
+
+                onWidthChanged: requestPaint()
+                onHeightChanged: requestPaint()
+
+                onPaint: root.drawChart(getContext("2d"), root.history, {
+                    width: width,
+                    height: height,
+                    gutter: 40,
+                    rightGutter: 48,
+                    top: 12,
+                    bottom: 18,
+                    labelFont: "11px sans-serif",
+                    maxBarW: 10,
+                    lineW: 2.5,
+                    markerR: 4
+                })
+            }
+        }
+
+        // Esc closes the modal.
+        Item {
+            focus: root.chartZoomed
+            anchors.fill: parent
+            Keys.onEscapePressed: root.chartZoomed = false
         }
     }
 }

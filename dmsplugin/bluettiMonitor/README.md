@@ -11,7 +11,9 @@ the bar, full detail in the popout.
 The popout carries a 24 hour battery chart with solar input as green bars on a second (right-hand)
 watt scale, the power breakdown, AC/DC details and pack state. The chart window is always a full 24
 hours anchored on the newest reading, so a stretch where the collector was not running shows as a
-gap rather than being stretched to fill the axis.
+gap rather than being stretched to fill the axis. Clicking the chart opens a zoomed view at 60 % of
+the screen (overlay layer) with the same data at a larger size; click the backdrop, the ✕ button or
+press Esc to close it.
 
 ## How it gets its data
 
