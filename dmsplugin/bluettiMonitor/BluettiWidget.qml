@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Layouts
 import Quickshell
 import Quickshell.Wayland
 import Quickshell.Io
@@ -934,144 +935,313 @@ PluginComponent {
             border.width: 1
             border.color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.25)
 
-            // Header
-            Row {
-                id: zoomHeader
-                anchors.top: parent.top
-                anchors.left: parent.left
-                anchors.right: parent.right
+            ColumnLayout {
+                anchors.fill: parent
                 anchors.margins: Theme.spacingM
                 spacing: Theme.spacingS
 
-                DankIcon {
-                    name: "show_chart"
-                    size: 18
-                    color: Theme.primary
-                    anchors.verticalCenter: parent.verticalCenter
+                // Header
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.spacingS
+
+                    DankIcon {
+                        name: "show_chart"
+                        size: 18
+                        color: Theme.primary
+                        Layout.alignment: Qt.AlignVCenter
+                    }
+
+                    StyledText {
+                        text: "Battery & Solar · last 24 h"
+                        font.pixelSize: Theme.fontSizeMedium
+                        font.weight: Font.Bold
+                        color: Theme.surfaceText
+                        Layout.alignment: Qt.AlignVCenter
+                    }
+
+                    Item { Layout.fillWidth: true; height: 1 }
+
+                    StyledText {
+                        visible: root.hasData
+                        text: root.hasData ? root.battery + "%  ·  " + root.num(root.reading.voltage, 2) + " V" : ""
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: Theme.surfaceVariantText
+                        Layout.alignment: Qt.AlignVCenter
+                    }
+
+                    StyledText {
+                        visible: root.hasData
+                        text: root.chargingLabel()
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: root.charging ? Theme.secondary : Theme.surfaceVariantText
+                        Layout.alignment: Qt.AlignVCenter
+                    }
+
+                    DankIcon {
+                        name: "close"
+                        size: 18
+                        color: Theme.surfaceVariantText
+                        Layout.alignment: Qt.AlignVCenter
+
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.chartZoomed = false
+                        }
+                    }
                 }
 
-                StyledText {
-                    text: "Battery & Solar · last 24 h"
-                    font.pixelSize: Theme.fontSizeMedium
-                    font.weight: Font.Bold
-                    color: Theme.surfaceText
-                    anchors.verticalCenter: parent.verticalCenter
+                // Legend: battery line + solar bars + live solar watts.
+                Row {
+                    Layout.alignment: Qt.AlignRight
+                    spacing: Theme.spacingS
+
+                    Rectangle {
+                        width: 14
+                        height: 3
+                        radius: 1.5
+                        color: Theme.primary
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    StyledText {
+                        text: "battery %"
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: Theme.surfaceVariantText
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    Rectangle {
+                        width: 10
+                        height: 10
+                        radius: 2
+                        color: Qt.rgba(Theme.success.r, Theme.success.g, Theme.success.b, 0.7)
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    StyledText {
+                        text: "solar W"
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: Theme.surfaceVariantText
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
                 }
 
-                // Live summary, centered in the leftover space.
-                StyledText {
-                    width: zoomHeader.width - 260
-                    horizontalAlignment: Text.AlignHCenter
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: root.hasData ? root.battery + "%  ·  solar " + root.watts(root.reading.dcIn) : ""
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: Theme.surfaceVariantText
-                    elide: Text.ElideRight
-                }
+                // The big chart takes all remaining vertical space.
+                Item {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
 
-                Item { width: 1; height: 1 }
+                    StyledText {
+                        anchors.centerIn: parent
+                        visible: !root.history || root.history.length < 2
+                        text: "Not enough history yet"
+                        font.pixelSize: Theme.fontSizeMedium
+                        color: Theme.surfaceVariantText
+                    }
 
-                DankIcon {
-                    name: "close"
-                    size: 18
-                    color: Theme.surfaceVariantText
-                    anchors.verticalCenter: parent.verticalCenter
-
-                    MouseArea {
+                    Canvas {
+                        id: zoomChart
                         anchors.fill: parent
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: root.chartZoomed = false
-                    }
-                }
-            }
+                        visible: root.history && root.history.length >= 2
+                        antialiasing: true
+                        renderStrategy: Canvas.Cooperative
 
-            // Legend: battery line + solar bars.
-            Row {
-                anchors.top: zoomHeader.bottom
-                anchors.topMargin: Theme.spacingXS
-                anchors.right: parent.right
-                anchors.rightMargin: Theme.spacingM
-                spacing: Theme.spacingS
+                        Connections {
+                            target: root
+                            function onHistoryChanged() {
+                                zoomChart.requestPaint()
+                            }
+                            function onChartZoomedChanged() {
+                                if (root.chartZoomed)
+                                    zoomChart.requestPaint()
+                            }
+                        }
 
-                Rectangle {
-                    width: 14
-                    height: 3
-                    radius: 1.5
-                    color: Theme.primary
-                    anchors.verticalCenter: parent.verticalCenter
-                }
+                        onWidthChanged: requestPaint()
+                        onHeightChanged: requestPaint()
 
-                StyledText {
-                    text: "battery %"
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: Theme.surfaceVariantText
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-
-                Rectangle {
-                    width: 10
-                    height: 10
-                    radius: 2
-                    color: Qt.rgba(Theme.success.r, Theme.success.g, Theme.success.b, 0.7)
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-
-                StyledText {
-                    text: "solar W"
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: Theme.surfaceVariantText
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-            }
-
-            StyledText {
-                anchors.centerIn: parent
-                visible: !root.history || root.history.length < 2
-                text: "Not enough history yet"
-                font.pixelSize: Theme.fontSizeMedium
-                color: Theme.surfaceVariantText
-            }
-
-            Canvas {
-                id: zoomChart
-                anchors.top: zoomHeader.bottom
-                anchors.topMargin: Theme.spacingS
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
-                anchors.bottomMargin: Theme.spacingM
-                anchors.leftMargin: Theme.spacingM
-                anchors.rightMargin: Theme.spacingM
-                visible: root.history && root.history.length >= 2
-                antialiasing: true
-                renderStrategy: Canvas.Cooperative
-
-                Connections {
-                    target: root
-                    function onHistoryChanged() {
-                        zoomChart.requestPaint()
-                    }
-                    function onChartZoomedChanged() {
-                        if (root.chartZoomed)
-                            zoomChart.requestPaint()
+                        onPaint: root.drawChart(getContext("2d"), root.history, {
+                            width: width,
+                            height: height,
+                            gutter: 40,
+                            rightGutter: 48,
+                            top: 12,
+                            bottom: 18,
+                            labelFont: "11px sans-serif",
+                            maxBarW: 10,
+                            lineW: 2.5,
+                            markerR: 4
+                        })
                     }
                 }
 
-                onWidthChanged: requestPaint()
-                onHeightChanged: requestPaint()
+                // Time-to-full estimate
+                StyledRect {
+                    Layout.fillWidth: true
+                    height: 34
+                    radius: Theme.cornerRadius * 1.5
+                    color: Qt.rgba(Theme.surfaceContainer.r, Theme.surfaceContainer.g, Theme.surfaceContainer.b, 0.5)
+                    border.width: 1
+                    border.color: Qt.rgba(Theme.secondary.r, Theme.secondary.g, Theme.secondary.b, 0.15)
+                    visible: !isNaN(root.hoursToFull)
 
-                onPaint: root.drawChart(getContext("2d"), root.history, {
-                    width: width,
-                    height: height,
-                    gutter: 40,
-                    rightGutter: 48,
-                    top: 12,
-                    bottom: 18,
-                    labelFont: "11px sans-serif",
-                    maxBarW: 10,
-                    lineW: 2.5,
-                    markerR: 4
-                })
+                    DankIcon {
+                        name: "schedule"
+                        size: 16
+                        color: Theme.secondary
+                        anchors.left: parent.left
+                        anchors.leftMargin: Theme.spacingM
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    StyledText {
+                        text: "Full in " + root.durationLabel(root.hoursToFull)
+                            + "  ·  at " + root.etaClockLabel()
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: Theme.surfaceText
+                        anchors.left: parent.left
+                        anchors.leftMargin: Theme.spacingM + 16 + Theme.spacingS
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+
+                // Power summary - three columns in the wide modal.
+                StyledRect {
+                    Layout.fillWidth: true
+                    height: zoomPowerGrid.implicitHeight + Theme.spacingM * 2
+                    radius: Theme.cornerRadius * 1.5
+                    color: Qt.rgba(Theme.surfaceContainer.r, Theme.surfaceContainer.g, Theme.surfaceContainer.b, 0.5)
+                    border.width: 1
+                    border.color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.1)
+
+                    Grid {
+                        id: zoomPowerGrid
+                        anchors.centerIn: parent
+                        width: parent.width - Theme.spacingM * 2
+                        columns: 3
+                        columnSpacing: Theme.spacingM
+                        rowSpacing: Theme.spacingS
+
+                        Repeater {
+                            model: root.hasData ? [
+                                { label: "Solar in", value: root.watts(root.reading.dcIn), icon: "solar_power" },
+                                { label: "AC in", value: root.watts(root.reading.acIn), icon: "power" },
+                                { label: "AC out", value: root.watts(root.reading.acOut), icon: "bolt" },
+                                { label: "DC out", value: root.watts(root.reading.dcOut), icon: "usb" },
+                                { label: "Net", value: root.signedWatts(root.netPower), icon: "trending_up", valueColor: root.netColor() },
+                                { label: "Generated", value: root.num(root.reading.generation, 1) + " kWh", icon: "insights" }
+                            ] : []
+
+                            delegate: Row {
+                                width: (zoomPowerGrid.width - Theme.spacingM * 2) / 3
+                                spacing: Theme.spacingS
+
+                                DankIcon {
+                                    name: modelData.icon
+                                    size: 16
+                                    color: Theme.primary
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+
+                                StyledText {
+                                    text: modelData.label
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    color: Theme.surfaceVariantText
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+
+                                StyledText {
+                                    text: modelData.value
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    font.weight: Font.Bold
+                                    color: modelData.valueColor !== undefined ? modelData.valueColor : Theme.surfaceText
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+                            }
+                        }
+
+                        StyledText {
+                            visible: !root.hasData
+                            text: root.loading ? "Querying the database…" : "No reading available"
+                            font.pixelSize: Theme.fontSizeSmall
+                            color: Theme.surfaceVariantText
+                        }
+                    }
+                }
+
+                // Detail rows - two columns in the wide modal.
+                StyledRect {
+                    Layout.fillWidth: true
+                    visible: root.hasData
+                    height: zoomDetailGrid.implicitHeight + Theme.spacingM * 2
+                    radius: Theme.cornerRadius * 1.5
+                    color: Qt.rgba(Theme.surfaceContainer.r, Theme.surfaceContainer.g, Theme.surfaceContainer.b, 0.5)
+                    border.width: 1
+                    border.color: Qt.rgba(Theme.secondary.r, Theme.secondary.g, Theme.secondary.b, 0.1)
+
+                    Grid {
+                        id: zoomDetailGrid
+                        anchors.centerIn: parent
+                        width: parent.width - Theme.spacingM * 2
+                        columns: 2
+                        columnSpacing: Theme.spacingXL
+                        rowSpacing: Theme.spacingXS
+
+                        Repeater {
+                            model: root.hasData ? [
+                                { label: "AC output", value: (root.reading.acOn ? "ON" : "OFF") + "  ·  " + root.num(root.reading.acVolt, 0) + " V  ·  " + root.num(root.reading.acFreq, 0) + " Hz" },
+                                { label: "DC output", value: (root.reading.dcOn ? "ON" : "OFF") + "  ·  " + root.watts(root.reading.dcOut) },
+                                { label: "Solar input", value: root.num(root.reading.dcVolt, 0) + " V  ·  " + root.num(root.reading.dcCurrent, 2) + " A" },
+                                { label: "Pack", value: root.num(root.reading.packPercent, 0) + "%  ·  " + root.num(root.reading.packVoltage, 2) + " V" }
+                            ] : []
+
+                            delegate: Item {
+                                width: (zoomDetailGrid.width - Theme.spacingXL) / 2
+                                height: 22
+
+                                StyledText {
+                                    anchors.left: parent.left
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: modelData.label
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    color: Theme.surfaceVariantText
+                                }
+
+                                StyledText {
+                                    anchors.right: parent.right
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: modelData.value
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    color: Theme.surfaceText
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Footer
+                Item {
+                    Layout.fillWidth: true
+                    height: 20
+
+                    StyledText {
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: root.hasData ? "Updated " + root.ageLabel() : "—"
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: root.stale ? Theme.error : Theme.surfaceVariantText
+                    }
+
+                    StyledText {
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "every " + root.refreshSecs + "s"
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: Theme.surfaceVariantText
+                    }
+                }
             }
         }
 
