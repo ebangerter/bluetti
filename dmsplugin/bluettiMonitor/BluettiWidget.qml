@@ -82,11 +82,13 @@ PluginComponent {
         + "'generation', power_generation"
         + ") FROM readings ORDER BY timestamp DESC LIMIT 1;"
 
-    // Battery percentage over the last 24 h, averaged into 10 minute buckets.
+    // Battery percentage and solar input over the last 24 h, averaged into 10
+    // minute buckets. Each sample is [unixSeconds, batteryPercent, solarWatts].
     // The window is anchored on the newest row rather than NOW() because the
     // MariaDB container runs on UTC while the collector writes host-local times.
-    readonly property string historySql: "SELECT COALESCE(JSON_ARRAYAGG(JSON_ARRAY(t, p)), '[]') FROM ("
-        + "SELECT MIN(UNIX_TIMESTAMP(timestamp)) AS t, ROUND(AVG(total_battery_percent)) AS p"
+    readonly property string historySql: "SELECT COALESCE(JSON_ARRAYAGG(JSON_ARRAY(t, p, s)), '[]') FROM ("
+        + "SELECT MIN(UNIX_TIMESTAMP(timestamp)) AS t, ROUND(AVG(total_battery_percent)) AS p,"
+        + " ROUND(AVG(dc_input_power)) AS s"
         + " FROM readings"
         + " WHERE timestamp >= (SELECT MAX(timestamp) FROM readings) - INTERVAL 24 HOUR"
         + " AND total_battery_percent IS NOT NULL"
@@ -505,10 +507,49 @@ PluginComponent {
                     }
 
                     StyledText {
-                        text: "Battery · last 24 h"
+                        text: "Battery & Solar · last 24 h"
                         font.pixelSize: Theme.fontSizeSmall
                         font.weight: Font.Bold
                         color: Theme.surfaceText
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+
+                // Legend: battery line + solar bars.
+                Row {
+                    anchors.top: parent.top
+                    anchors.topMargin: Theme.spacingS
+                    anchors.right: parent.right
+                    anchors.rightMargin: Theme.spacingM
+                    spacing: Theme.spacingS
+
+                    Rectangle {
+                        width: 10
+                        height: 3
+                        radius: 1.5
+                        color: Theme.primary
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    StyledText {
+                        text: "%"
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: Theme.surfaceVariantText
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    Rectangle {
+                        width: 8
+                        height: 8
+                        radius: 2
+                        color: Qt.rgba(Theme.success.r, Theme.success.g, Theme.success.b, 0.7)
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    StyledText {
+                        text: "solar W"
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: Theme.surfaceVariantText
                         anchors.verticalCenter: parent.verticalCenter
                     }
                 }
@@ -531,8 +572,10 @@ PluginComponent {
                     visible: root.history && root.history.length >= 2
                     antialiasing: true
 
-                    // Room on the left for the 0/50/100 labels.
+                    // Room on the left for the 0/50/100 % labels and on the
+                    // right for the solar power labels (second scale).
                     readonly property int gutter: 26
+                    readonly property int rightGutter: 30
 
                     Connections {
                         target: root
@@ -550,7 +593,7 @@ PluginComponent {
                             return
 
                         const left = gutter
-                        const right = width
+                        const right = width - rightGutter
                         const top = 10
                         const bottom = height - 14
                         const plotWidth = right - left
@@ -566,6 +609,16 @@ PluginComponent {
 
                         const xAt = t => left + ((t - tStart) / span) * plotWidth
                         const yAt = pct => bottom - (Math.max(0, Math.min(100, pct)) / 100) * plotHeight
+
+                        // Solar scale: bars on the second (right) axis, scaled to
+                        // a round maximum derived from the peak of the data.
+                        let solarMax = 0
+                        for (const point of points)
+                            solarMax = Math.max(solarMax, Number(point[2]) || 0)
+                        const solarScale = solarMax > 0
+                            ? Math.ceil(solarMax / 100) * 100
+                            : 100
+                        const ySolarAt = w => bottom - (Math.max(0, w) / solarScale) * plotHeight
 
                         // Horizontal guides at 0 / 25 / 50 / 75 / 100 %.
                         ctx.lineWidth = 1
@@ -586,6 +639,29 @@ PluginComponent {
                                                         Theme.surfaceVariantText.b, 0.8)
                                 ctx.fillText(pct + "%", left - 4, y)
                             }
+                        }
+
+                        // Solar bars on the second (right) scale, drawn behind the
+                        // battery curve. One bar per 10 minute bucket.
+                        const barW = Math.max(2, Math.min(6, plotWidth / points.length - 1))
+                        for (let i = 0; i < points.length; i++) {
+                            const solar = Number(points[i][2]) || 0
+                            if (solar <= 0)
+                                continue
+                            const bx = xAt(points[i][0])
+                            const by = ySolarAt(solar)
+                            ctx.fillStyle = Qt.rgba(Theme.success.r, Theme.success.g, Theme.success.b, 0.55)
+                            ctx.fillRect(bx - barW / 2, by, barW, bottom - by)
+                        }
+
+                        // Solar axis labels in the right gutter (second scale).
+                        ctx.textAlign = "left"
+                        ctx.textBaseline = "middle"
+                        const solarStep = solarScale >= 400 ? 200 : 100
+                        for (let w = solarStep; w <= solarScale; w += solarStep) {
+                            const y = ySolarAt(w)
+                            ctx.fillStyle = Qt.rgba(Theme.success.r, Theme.success.g, Theme.success.b, 0.9)
+                            ctx.fillText(w + "W", right + 3, y)
                         }
 
                         // Filled area under the curve.
@@ -626,6 +702,7 @@ PluginComponent {
                         ctx.textBaseline = "top"
                         ctx.textAlign = "left"
                         ctx.fillText("-24 h", left, bottom + 3)
+                        ctx.fillText("-12 h", (left + right) / 2, bottom + 3)
                         ctx.textAlign = "right"
                         ctx.fillText("now", right, bottom + 3)
                     }

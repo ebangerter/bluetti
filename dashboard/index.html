@@ -290,11 +290,13 @@ function renderCharts(rows) {
   });
 
   makeChart("kpiChart", [
+    { type: "bar", label: "Solar In (DC)", data: points("dc_input_power"), backgroundColor: "rgba(102,187,106,0.6)", borderColor: COLORS.green, borderWidth: 1, yAxisID: "y2" },
     { label: "Net Power (W)", data: points("net_power"), borderColor: COLORS.green, tension: 0.3, yAxisID: "y" },
     { label: "Charging State", data: points("charging_state"), borderColor: COLORS.blue, yAxisID: "y1", tension: 0 },
   ], {
-    y:  { position: "left",  ticks: { color: COLORS.green }, grid: { color: "#222" } },
-    y1: { position: "right", min: 0, max: 4, ticks: { color: COLORS.blue, callback: v => ["N", "DC", "AC", "AC+DC"][v] || v }, grid: { drawOnChartArea: false } },
+    y:  { position: "left",  ticks: { color: COLORS.green }, grid: { color: "#222" }, title: { display: true, text: "Net Power (W)", color: COLORS.green } },
+    y1: { position: "right", stack: "rightAxes", min: 0, max: 4, ticks: { color: COLORS.blue, callback: v => ["N", "DC", "AC", "AC+DC"][v] || v }, grid: { drawOnChartArea: false } },
+    y2: { position: "right", stack: "rightAxes", min: 0, ticks: { color: COLORS.green, callback: v => v + "W" }, grid: { drawOnChartArea: false }, title: { display: true, text: "Solar (W)", color: COLORS.green } },
     x: commonOpts.scales.x,
   });
 }
